@@ -772,7 +772,7 @@ function renderSettle(){
       </div>
       ${settleFx.loading?`<div class="hint" style="padding-bottom:12px">Fetching live rates…</div>`:''}
       ${settleFx.error?`<div class="hint" style="color:var(--red);padding-bottom:12px">Could not fetch rates — check your connection.</div>`:''}
-      ${(settleFx.rate&&settleFx.to)?`<div class="fx-rate">1 ${ISO[cur()]||cur()} = ${settleFx.rate.toLocaleString(undefined,{minimumFractionDigits:4,maximumFractionDigits:4})} ${ISO[settleFx.to]||settleFx.to}&nbsp;&nbsp;<span class="muted small">· open.er-api.com · live</span></div>`:''}
+      ${(settleFx.rate&&settleFx.to)?`<div class="fx-rate">1 ${ISO[cur()]||cur()} = ${settleFx.rate.toLocaleString(undefined,{minimumFractionDigits:4,maximumFractionDigits:4})} ${ISO[settleFx.to]||settleFx.to}&nbsp;&nbsp;<span class="muted small">· Frankfurter · ECB reference rate</span></div>`:''}
     </div>`;
 
   view.innerHTML = `
@@ -1037,11 +1037,11 @@ async function fetchFx(fromSym, toSym){
   if(!from||!to) return null;
   if(from===to) return 1;
   try{
-    const r = await fetch(`https://open.er-api.com/v6/latest/${from}`);
+    // Frankfurter — ECB official daily reference rates, no API key required
+    const r = await fetch(`https://api.frankfurter.dev/v1/latest?from=${from}&to=${to}`);
     if(!r.ok) throw 0;
     const d = await r.json();
-    if(d.result!=='success') throw 0;
-    return d.rates[to] ?? null;
+    return d.rates?.[to] ?? null;
   }catch{ return null; }
 }
 
