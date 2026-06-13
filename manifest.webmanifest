@@ -1,0 +1,14 @@
+{
+  "name": "SplitTrip — Trip Bill Splitter",
+  "short_name": "SplitTrip",
+  "description": "Split bills between friends on a trip, with photo OCR and settle-up.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f2f2f7",
+  "theme_color": "#007aff",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
