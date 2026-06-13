@@ -1102,6 +1102,31 @@ function importData(){
 
 /* ── Live sync (Firebase Realtime Database) ──────────────────────────────── */
 function _stateForPush(){ return JSON.parse(JSON.stringify(state)); }
+// Order-independent stringify — Firebase returns object keys re-sorted, so a
+// plain JSON.stringify comparison would flag our own writes as remote changes.
+function _stableStr(v){
+  if(Array.isArray(v)) return "["+v.map(_stableStr).join(",")+"]";
+  if(v && typeof v==="object")
+    return "{"+Object.keys(v).sort().map(k=>JSON.stringify(k)+":"+_stableStr(v[k])).join(",")+"}";
+  return JSON.stringify(v===undefined?null:v);
+}
+// Firebase strips empty arrays/objects and may return arrays as keyed objects.
+// Coerce incoming data back into the shape render()/settle() expect.
+function _normalizeState(s){
+  s = (s && typeof s==="object") ? s : {};
+  const arr = x => Array.isArray(x) ? x : (x && typeof x==="object" ? Object.values(x) : []);
+  s.people = arr(s.people);
+  s.bills  = arr(s.bills).map(b=>{
+    if(b && typeof b==="object"){
+      if("participants" in b) b.participants = arr(b.participants);
+      if("items" in b) b.items = arr(b.items).map(it=>{ if(it && "sharedBy" in it) it.sharedBy = arr(it.sharedBy); return it; });
+    }
+    return b;
+  });
+  if(!s.settings || typeof s.settings!=="object") s.settings = { currency:"$" };
+  if(!s.settings.currency) s.settings.currency = "$";
+  return s;
+}
 function _genCode(){
   const c='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no I,O,0,1
   let s=''; for(let i=0;i<6;i++) s+=c[Math.floor(Math.random()*c.length)]; return s;
@@ -1131,8 +1156,7 @@ async function _doJoin(code){
   if(syncRef) syncRef.off();
   syncRef=firebase.database().ref('trips/'+code);
   const snap=await syncRef.once('value');
-  state=snap.val()||state;
-  if(!state.settings) state.settings={currency:'$'};
+  state=_normalizeState(snap.val()||state);
   localStorage.setItem(KEY,JSON.stringify(state));
   draft=freshDraft(); syncId=code;
   localStorage.setItem(KEY+'.sync',code);
@@ -1140,9 +1164,10 @@ async function _doJoin(code){
     const d=snap.val(); if(!d) return;
     clearTimeout(_syncDebounce);
     _syncDebounce=setTimeout(()=>{
-      if(JSON.stringify(d)===JSON.stringify(state)) return; // own echo
-      if(activeTab==='add'&&(draft.description||draft.items.length||draft.total)) return;
-      state=d; if(!state.settings) state.settings={currency:'$'};
+      const incoming=_normalizeState(d);
+      if(_stableStr(incoming)===_stableStr(state)) return;  // our own echo / no real change
+      if(activeTab==='add'&&(draft.description||draft.items.length||draft.total)) return; // don't clobber an active edit
+      state=incoming;
       localStorage.setItem(KEY,JSON.stringify(state));
       render(); toast("Trip updated");
     },300);
