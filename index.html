@@ -730,6 +730,7 @@ function renderDetail(billId){
       <button class="btn sm" data-toggle2="${b.id}">${b.paid?'Mark unpaid':'Mark paid'}</button>
       <button class="btn danger sm" data-delbill="${b.id}">Delete</button>
     </div>`;
+  bind();
   det.scrollIntoView({behavior:"smooth", block:"nearest"});
 }
 
