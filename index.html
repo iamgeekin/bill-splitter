@@ -507,7 +507,7 @@ let settleFx = { to: null, rate: null, loading: false, error: false };
 
 function freshDraft(){
   return { id:null, description:"", date:today(), payerId:(state?.people[0]?.id||null),
-    mode:"equal", total:"", participants:new Set(), items:[], tax:"", tip:"" };
+    mode:"equal", total:"", participants:new Set(), items:[], tax:"", tip:"", currency:state?.settings?.currency||"$" };
 }
 
 /* ---------------- Money helpers ---------------- */
@@ -515,7 +515,7 @@ const cur = () => state.settings.currency || "$";
 const ISO = {'$':'USD','€':'EUR','£':'GBP','¥':'JPY','฿':'THB','A$':'AUD','C$':'CAD','S$':'SGD','Rp':'IDR'};
 const CURRENCIES = ["$","€","£","¥","฿","A$","C$","S$","Rp"];
 const toCents = v => Math.round((parseFloat(v)||0)*100);
-const money = c => cur() + (c/100).toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2});
+const money = (c, sym) => (sym||cur()) + (c/100).toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2});
 
 function distribute(amount, weights){
   // split integer `amount` cents across weights, summing exactly to amount
@@ -657,10 +657,16 @@ function renderAdd(){
     <button data-mode="items" class="${draft.mode==='items'?'on':''}">By item / receipt</button>
   </div>`;
 
+  const curPicker = `
+    <h2 class="section">Currency</h2>
+    <div class="card"><div class="people-pick">
+      ${CURRENCIES.map(s=>`<span class="chip ${(draft.currency||cur())===s?'on':''}" data-billcur="${esc(s)}">${esc(s)}</span>`).join("")}
+    </div></div>`;
+
   if(draft.mode==="equal"){
-    body += `
+    body += curPicker + `
     <div class="card">
-      <label class="fld"><span class="lbl">Total amount (${esc(cur())})</span>
+      <label class="fld"><span class="lbl">Total amount (${esc(draft.currency||cur())})</span>
         <input id="f-total" inputmode="decimal" placeholder="0.00" value="${esc(draft.total)}"></label>
     </div>
     <h2 class="section">Split between</h2>
@@ -669,7 +675,7 @@ function renderAdd(){
       ${peopleChips(draft.participants,"part")}
     </div></div>`;
   } else {
-    body += `
+    body += curPicker + `
     <div class="hint">Add each line item and tap who shares it — or scan a receipt to fill them in.</div>
     <div class="card" style="padding:6px 0">
       <div class="people-pick" style="padding-top:10px;padding-bottom:4px">
@@ -679,9 +685,9 @@ function renderAdd(){
       <div id="items-list">${renderItems()}</div>
     </div>
     <div class="card">
-      <label class="fld"><span class="lbl">Tax (${esc(cur())}) — split by item total</span>
+      <label class="fld"><span class="lbl">Tax (${esc(draft.currency||cur())}) — split by item total</span>
         <input id="f-tax" inputmode="decimal" placeholder="0.00" value="${esc(draft.tax)}"></label>
-      <label class="fld"><span class="lbl">Tip (${esc(cur())}) — split by item total</span>
+      <label class="fld"><span class="lbl">Tip (${esc(draft.currency||cur())}) — split by item total</span>
         <input id="f-tip" inputmode="decimal" placeholder="0.00" value="${esc(draft.tip)}"></label>
     </div>`;
   }
@@ -715,7 +721,7 @@ function renderItems(){
 function buildBillFromDraft(){
   const b = { id:draft.id||uid(), description:draft.description.trim()||"Untitled",
     date:draft.date||today(), payerId:draft.payerId, mode:draft.mode, paid:false,
-    createdAt:Date.now() };
+    currency:draft.currency||cur(), createdAt:Date.now() };
   if(draft.mode==="equal"){
     b.participants = [...draft.participants];
     b.totalCents = toCents(draft.total);
@@ -736,8 +742,9 @@ function updatePreview(){
   if(!b.totalCents || !ids.length){
     pv.innerHTML = `<div class="muted small">Pick people and an amount to see the split.</div>`; return;
   }
-  let rows = `<div class="pr"><b>Total</b><b>${money(b.totalCents)}</b></div>`;
-  rows += ids.map(id=>`<div class="pr"><span>${esc(personName(id))}</span><span>${money(shares[id])}</span></div>`).join("");
+  const dc = draft.currency||cur();
+  let rows = `<div class="pr"><b>Total</b><b>${money(b.totalCents,dc)}</b></div>`;
+  rows += ids.map(id=>`<div class="pr"><span>${esc(personName(id))}</span><span>${money(shares[id],dc)}</span></div>`).join("");
   pv.innerHTML = rows;
 }
 
@@ -749,7 +756,9 @@ function renderHistory(){
   }
   const bills = [...state.bills].sort((a,b)=> (b.date||"").localeCompare(a.date||"") || b.createdAt-a.createdAt);
   const shown = bills.filter(b=> historyFilter==="all" ? true : historyFilter==="paid" ? b.paid : !b.paid);
-  const totUnpaid = bills.filter(b=>!b.paid).reduce((a,b)=>a+b.totalCents,0);
+  const unpaidBills = bills.filter(b=>!b.paid);
+  const unpaidByCur = unpaidBills.reduce((m,b)=>{ const s=b.currency||cur(); m[s]=(m[s]||0)+b.totalCents; return m; },{});
+  const unpaidTotalStr = Object.entries(unpaidByCur).map(([s,c])=>money(c,s)).join(' + ') || money(0);
 
   view.innerHTML = `
     <div class="filter-bar">
@@ -764,13 +773,13 @@ function renderHistory(){
             <td class="muted">${esc((b.date||"").slice(5))}</td>
             <td>${esc(b.description)}<div class="muted" style="font-size:12px">${b.participants.length} ${b.participants.length===1?'person':'people'} · ${b.mode==='items'?'itemized':'equal'}</div></td>
             <td>${esc(personName(b.payerId).split(' ')[0])}</td>
-            <td class="r amt">${money(b.totalCents)}</td>
+            <td class="r amt">${money(b.totalCents, b.currency)}</td>
             <td><span class="tag ${b.paid?'paid':'unpaid'}" data-toggle="${b.id}">${b.paid?'Paid':'Unpaid'}</span></td>
           </tr>`).join("")}
         </tbody>
       </table>
     </div>
-    <div class="hint">Tap a status to flip it · tap a row for details. Unpaid total: <b>${money(totUnpaid)}</b></div>
+    <div class="hint">Tap a status to flip it · tap a row for details. Unpaid total: <b>${unpaidTotalStr}</b></div>
     <div id="detail"></div>`;
   bind();
 }
@@ -779,11 +788,12 @@ function renderDetail(billId){
   const b = state.bills.find(x=>x.id===billId); if(!b) return;
   const shares = computeShares(b);
   const det = $("#detail");
+  const bc = b.currency||cur();
   let lines = "";
   if(b.mode==="items"){
-    lines = b.items.map(it=>`<div class="pr"><span>${esc(it.name)} <span class="muted">(${it.sharedBy.map(id=>personName(id).split(' ')[0]).join(', ')})</span></span><span>${money(it.amountCents)}</span></div>`).join("");
-    if(b.taxCents) lines+=`<div class="pr muted"><span>Tax</span><span>${money(b.taxCents)}</span></div>`;
-    if(b.tipCents) lines+=`<div class="pr muted"><span>Tip</span><span>${money(b.tipCents)}</span></div>`;
+    lines = b.items.map(it=>`<div class="pr"><span>${esc(it.name)} <span class="muted">(${it.sharedBy.map(id=>personName(id).split(' ')[0]).join(', ')})</span></span><span>${money(it.amountCents,bc)}</span></div>`).join("");
+    if(b.taxCents) lines+=`<div class="pr muted"><span>Tax</span><span>${money(b.taxCents,bc)}</span></div>`;
+    if(b.tipCents) lines+=`<div class="pr muted"><span>Tip</span><span>${money(b.tipCents,bc)}</span></div>`;
   }
   det.innerHTML = `
     <h2 class="section">${esc(b.description)}</h2>
@@ -791,7 +801,7 @@ function renderDetail(billId){
       ${lines}
       ${lines?'<div style="height:8px"></div>':''}
       <div class="pr"><b>Each person owes ${personName(b.payerId).split(' ')[0]}</b><span></span></div>
-      ${Object.keys(shares).map(id=> id===b.payerId?'':`<div class="pr"><span>${esc(personName(id))}</span><b>${money(shares[id])}</b></div>`).join("")}
+      ${Object.keys(shares).map(id=> id===b.payerId?'':`<div class="pr"><span>${esc(personName(id))}</span><b>${money(shares[id],bc)}</b></div>`).join("")}
     </div></div>
     <div class="row card" style="gap:10px">
       <button class="btn sec sm" data-edit="${b.id}">Edit</button>
@@ -816,35 +826,43 @@ function renderSettle(){
   const {bal, tx} = settle(unpaid);
   const totUnpaid = unpaid.reduce((a,b)=>a+b.totalCents,0);
 
+  // Determine the display currency for this settle view
+  const billCurs = [...new Set(unpaid.map(b=>b.currency||cur()))];
+  const settleCur = billCurs.length===1 ? billCurs[0] : cur();
+  const mixedCurs = billCurs.length > 1;
+
   // Amount formatter — applies live FX rate when one is loaded
   const fm = (cents) => {
     if(settleFx.rate && settleFx.to){
       const v = (cents/100)*settleFx.rate;
       return settleFx.to + v.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
     }
-    return money(cents);
+    return money(cents, settleCur);
   };
 
   // Build currency converter card
-  const otherCurs = CURRENCIES.filter(s=>s!==cur());
+  const otherCurs = CURRENCIES.filter(s=>s!==settleCur);
   const fxCard = `
     <h2 class="section">Currency converter</h2>
     <div class="card">
       <div class="people-pick" id="fx-pick">
-        <span class="chip ${!settleFx.to?'on':''}" data-fx="">${esc(cur())} <span style="opacity:.7;font-size:13px">base</span></span>
+        <span class="chip ${!settleFx.to?'on':''}" data-fx="">${esc(settleCur)} <span style="opacity:.7;font-size:13px">base</span></span>
         ${otherCurs.map(s=>`<span class="chip ${settleFx.to===s?'on':''}" data-fx="${esc(s)}">${esc(s)}</span>`).join("")}
       </div>
       ${settleFx.loading?`<div class="hint" style="padding-bottom:12px">Fetching live rates…</div>`:''}
       ${settleFx.error?`<div class="hint" style="color:var(--red);padding-bottom:12px">Could not fetch rates — check your connection.</div>`:''}
-      ${(settleFx.rate&&settleFx.to)?`<div class="fx-rate">1 ${ISO[cur()]||cur()} = ${settleFx.rate.toLocaleString(undefined,{minimumFractionDigits:4,maximumFractionDigits:4})} ${ISO[settleFx.to]||settleFx.to}&nbsp;&nbsp;<span class="muted small">· Frankfurter · ECB reference rate</span></div>`:''}
+      ${(settleFx.rate&&settleFx.to)?`<div class="fx-rate">1 ${ISO[settleCur]||settleCur} = ${settleFx.rate.toLocaleString(undefined,{minimumFractionDigits:4,maximumFractionDigits:4})} ${ISO[settleFx.to]||settleFx.to}&nbsp;&nbsp;<span class="muted small">· Frankfurter · ECB reference rate</span></div>`:''}
     </div>`;
+
+  const mixedBanner = mixedCurs ? `<div class="hint" style="color:var(--red);margin-top:4px">⚠️ Bills are in multiple currencies (${billCurs.join(', ')}) — settlement totals are combined using face value. Use the converter below to compare in a single currency.</div>` : '';
 
   view.innerHTML = `
     <div class="card"><div class="split-preview">
-      <div class="pr"><b>${unpaid.length} unpaid bill${unpaid.length>1?'s':''}</b><b>${money(totUnpaid)}</b></div>
+      <div class="pr"><b>${unpaid.length} unpaid bill${unpaid.length>1?'s':''}</b><b>${money(totUnpaid, settleCur)}</b></div>
       <div class="pr"><span>Suggested payments</span><span>${tx.length}</span></div>
     </div></div>
 
+    ${mixedBanner}
     ${fxCard}
 
     <h2 class="section">Who pays whom</h2>
@@ -901,10 +919,13 @@ function renderPeople(){
       </div>
     </div>
 
-    <h2 class="section">Currency</h2>
-    <div class="card"><div class="people-pick">
-      ${CURRENCIES.map(s=>`<span class="chip ${cur()===s?'on':''}" data-cur="${esc(s)}">${esc(s)}</span>`).join("")}
-    </div></div>
+    <h2 class="section">Default currency</h2>
+    <div class="card">
+      <div class="hint" style="padding:10px 16px 2px">New bills will use this currency by default.</div>
+      <div class="people-pick" style="padding-bottom:10px">
+        ${CURRENCIES.map(s=>`<span class="chip ${cur()===s?'on':''}" data-cur="${esc(s)}">${esc(s)}</span>`).join("")}
+      </div>
+    </div>
 
     <h2 class="section">Live sync${syncId?` &nbsp;<span class="sync-dot"></span>`:''}</h2>
     ${FB_READY ? (syncId ? `
@@ -971,7 +992,8 @@ function bind(){
     if(settleFx.to===sym && settleFx.rate!=null) return; // already loaded
     settleFx={to:sym,rate:null,loading:true,error:false};
     renderSettle();
-    fetchFx(cur(),sym).then(rate=>{
+    const unpaidNow=state.bills.filter(b=>!b.paid); const curs=[...new Set(unpaidNow.map(b=>b.currency||cur()))]; const baseCur=curs.length===1?curs[0]:cur();
+    fetchFx(baseCur,sym).then(rate=>{
       if(settleFx.to!==sym) return; // user changed mid-flight
       settleFx={to:sym,rate,loading:false,error:!rate};
       renderSettle();
@@ -1007,6 +1029,7 @@ function bindAdd(){
   on("#f-tax","input",e=>{draft.tax=e.target.value; updatePreview();});
   on("#f-tip","input",e=>{draft.tip=e.target.value; updatePreview();});
 
+  view.querySelectorAll("[data-billcur]").forEach(el=> el.onclick=()=>{ draft.currency=el.dataset.billcur; renderAdd(); });
   view.querySelectorAll("[data-payer]").forEach(el=> el.onclick=()=>{ draft.payerId=el.dataset.payer; renderAdd(); });
   view.querySelectorAll("[data-mode]").forEach(el=> el.onclick=()=>{ draft.mode=el.dataset.mode; renderAdd(); });
   view.querySelectorAll("[data-part]").forEach(el=> el.onclick=()=>{
@@ -1056,6 +1079,7 @@ function saveBill(){
 function startEdit(id){
   const b=state.bills.find(x=>x.id===id); if(!b) return;
   draft={ id:b.id, description:b.description, date:b.date, payerId:b.payerId, mode:b.mode,
+    currency:b.currency||cur(),
     total:b.mode==="equal"?(b.totalCents/100).toString():"",
     participants:new Set(b.mode==="equal"?b.participants:[]),
     items:b.mode==="items"?b.items.map(it=>({name:it.name, amount:(it.amountCents/100).toString(), sharedBy:[...it.sharedBy]})):[],
