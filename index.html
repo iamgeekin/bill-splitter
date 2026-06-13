@@ -328,6 +328,21 @@ nav.tabs svg{width:25px;height:25px;}
 
 .bal-pos{color:var(--green);}
 .bal-neg{color:var(--red);}
+.sync-dot{
+  display:inline-block;width:8px;height:8px;border-radius:50%;
+  background:var(--green);margin-left:6px;vertical-align:middle;
+  box-shadow:0 0 0 0 rgba(48,209,88,.4);
+  animation:pulse-sync 2s infinite;
+}
+@keyframes pulse-sync{
+  0%{box-shadow:0 0 0 0 rgba(48,209,88,.4);}
+  70%{box-shadow:0 0 0 7px rgba(48,209,88,0);}
+  100%{box-shadow:0 0 0 0 rgba(48,209,88,0);}
+}
+.trip-code{
+  font-size:30px;font-weight:700;letter-spacing:5px;padding:10px 0 4px;
+  font-family:'SF Mono',Menlo,monospace;
+}
 
 /* ── Item Rows ── */
 .item-row{display:flex;gap:8px;align-items:flex-start;padding:10px 12px;border-bottom:.5px solid var(--sep);}
@@ -440,8 +455,33 @@ details.bill-det summary::-webkit-details-marker{display:none;}
 <div class="toast" id="toast"></div>
 <input type="file" id="file" accept="image/*" capture="environment" style="display:none">
 
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <script>
 "use strict";
+
+/* ══════════════════════════════════════════════════════════════════════════
+   FIREBASE SETUP  — fill in your project values to enable live sync
+   ══════════════════════════════════════════════════════════════════════════
+   1. Go to https://console.firebase.google.com → New project (free Spark plan)
+   2. Gear icon → Project settings → Your apps → </> (Web) → Register app
+   3. Copy the firebaseConfig values from the snippet shown → paste below
+   4. Build → Realtime Database → Create database → any region
+      → Start in test mode → Enable
+   ══════════════════════════════════════════════════════════════════════════ */
+const FIREBASE_CONFIG = {
+  apiKey:            "",   // ← paste your values here
+  authDomain:        "",
+  databaseURL:       "",   // e.g. https://my-app-default-rtdb.firebaseio.com
+  projectId:         "",
+  storageBucket:     "",
+  messagingSenderId: "",
+  appId:             ""
+};
+const FB_READY = !!FIREBASE_CONFIG.databaseURL && (()=>{
+  try{ firebase.initializeApp(FIREBASE_CONFIG); return true; }catch{ return false; }
+})();
+
 /* ---------------- State ---------------- */
 const KEY = "splittrip.v1";
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now()+"-"+Math.random().toString(16).slice(2));
@@ -449,7 +489,15 @@ const today = () => new Date().toISOString().slice(0,10);
 
 let state = load() || { people:[], bills:[], settings:{currency:"$"} };
 function load(){ try{ return JSON.parse(localStorage.getItem(KEY)); }catch{ return null; } }
-function save(){ localStorage.setItem(KEY, JSON.stringify(state)); }
+function save(){
+  localStorage.setItem(KEY, JSON.stringify(state));
+  if(syncRef) syncRef.set(_stateForPush()).catch(()=>{});
+}
+
+// Live sync state
+let syncId  = null;   // 6-char trip code, null = local only
+let syncRef = null;   // Firebase DatabaseReference when connected
+let _syncDebounce;
 
 let activeTab = "add";
 let draft = freshDraft();
@@ -858,12 +906,31 @@ function renderPeople(){
       ${CURRENCIES.map(s=>`<span class="chip ${cur()===s?'on':''}" data-cur="${esc(s)}">${esc(s)}</span>`).join("")}
     </div></div>
 
-    <h2 class="section">Share with your group</h2>
+    <h2 class="section">Live sync${syncId?` &nbsp;<span class="sync-dot"></span>`:''}</h2>
+    ${FB_READY ? (syncId ? `
+    <div class="card" style="text-align:center;padding:20px 16px 16px">
+      <div class="muted small">Connected · changes sync to everyone in real time</div>
+      <div class="trip-code">${esc(syncId)}</div>
+      <div class="muted small" style="margin-bottom:14px">Share this code with your group</div>
+      <div style="display:flex;gap:8px;justify-content:center">
+        <button class="btn sm" data-copylink="1">Copy link</button>
+        <button class="btn danger sm" data-leavetrip="1">Leave trip</button>
+      </div>
+    </div>` : `
     <div class="card">
-      <div class="row"><div class="grow"><div>Share this trip</div><div class="muted small">Creates a snapshot link your group can open & import</div></div>
-        <button class="btn sm" data-share="1">Share</button></div>
-    </div>
-    <div class="hint">The link carries a snapshot of the current people &amp; bills. It's a copy, not a live sync — re-share anytime to send the latest.</div>
+      <div class="row"><div class="grow"><div>Start a shared trip</div><div class="muted small">Real-time sync — everyone sees bill changes instantly</div></div>
+        <button class="btn sm" data-createtrip="1">Create</button></div>
+      <div style="border-top:.5px solid var(--sep);padding:12px 16px 8px">
+        <div class="muted small" style="margin-bottom:8px">Already have a trip code?</div>
+        <div style="display:flex;gap:8px">
+          <input class="inp" id="join-code" placeholder="ABC123" maxlength="6" autocomplete="off" autocapitalize="characters">
+          <button class="btn sm" data-jointrip="1">Join</button>
+        </div>
+      </div>
+    </div>`) : `
+    <div class="card"><div class="hint" style="padding:16px;color:var(--red)">
+      ⚠️ Firebase not configured. Open index.html and fill in the FIREBASE_CONFIG block near the top of the &lt;script&gt; tag.
+    </div></div>`}
 
     <h2 class="section">Your data</h2>
     <div class="card">
@@ -918,7 +985,14 @@ function bind(){
     const p=state.people.find(x=>x.id===el.dataset.setphone); if(p){ p.phone=el.value.trim(); save(); }
   });
   view.querySelectorAll("[data-cur]").forEach(el=> el.onclick=()=>{ state.settings.currency=el.dataset.cur; save(); render(); });
-  const sh=view.querySelector("[data-share]"); if(sh) sh.onclick=shareTrip;
+  const ct=view.querySelector("[data-createtrip]"); if(ct) ct.onclick=createTrip;
+  const lt=view.querySelector("[data-leavetrip]"); if(lt) lt.onclick=leaveTrip;
+  const cl=view.querySelector("[data-copylink]"); if(cl) cl.onclick=copyTripLink;
+  const jt=view.querySelector("[data-jointrip]"); if(jt) jt.onclick=()=>joinTrip(view.querySelector("#join-code")?.value||"");
+  const jc=view.querySelector("#join-code"); if(jc){
+    jc.onkeydown=e=>{ if(e.key==="Enter") joinTrip(jc.value); };
+    jc.oninput=e=>{ e.target.value=e.target.value.toUpperCase().replace(/[^A-Z0-9]/g,""); };
+  }
   const ex=view.querySelector("[data-export]"); if(ex) ex.onclick=exportData;
   const im=view.querySelector("[data-import]"); if(im) im.onclick=importData;
   const rs=view.querySelector("[data-reset]"); if(rs) rs.onclick=resetAll;
@@ -1026,76 +1100,75 @@ function importData(){
   f.click();
 }
 
-/* ---------------- Share via link (snapshot in URL hash) ----------------
-   The whole trip is gzip-compressed (when the browser supports it) and
-   base64url-encoded into the URL fragment. The fragment is never sent to
-   the server, so the snapshot stays between the people sharing the link. */
-function _b64urlEnc(bytes){
-  let s=""; for(let i=0;i<bytes.length;i++) s+=String.fromCharCode(bytes[i]);
-  return btoa(s).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+/* ── Live sync (Firebase Realtime Database) ──────────────────────────────── */
+function _stateForPush(){ return JSON.parse(JSON.stringify(state)); }
+function _genCode(){
+  const c='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no I,O,0,1
+  let s=''; for(let i=0;i<6;i++) s+=c[Math.floor(Math.random()*c.length)]; return s;
 }
-function _b64urlDec(str){
-  str=str.replace(/-/g,"+").replace(/_/g,"/"); while(str.length%4) str+="=";
-  const bin=atob(str), out=new Uint8Array(bin.length);
-  for(let i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i);
-  return out;
-}
-async function _gzip(str){
-  const cs=new CompressionStream("gzip"), w=cs.writable.getWriter();
-  w.write(new TextEncoder().encode(str)); w.close();
-  return new Uint8Array(await new Response(cs.readable).arrayBuffer());
-}
-async function _gunzip(bytes){
-  const ds=new DecompressionStream("gzip"), w=ds.writable.getWriter();
-  w.write(bytes); w.close();
-  return new TextDecoder().decode(await new Response(ds.readable).arrayBuffer());
-}
-async function buildShareUrl(){
-  const json=JSON.stringify(state);
-  let flag, payload;
-  if(typeof CompressionStream==="function"){ flag="1"; payload=_b64urlEnc(await _gzip(json)); }
-  else { flag="0"; payload=_b64urlEnc(new TextEncoder().encode(json)); }
-  return location.origin + location.pathname + "#trip=" + flag + payload;
-}
-async function shareTrip(){
-  if(!state.people.length && !state.bills.length){ toast("Add people or bills first"); return; }
-  let url;
-  try{ url=await buildShareUrl(); }catch{ toast("Couldn't create link"); return; }
+async function createTrip(){
+  if(!FB_READY){ toast("Configure Firebase first — see code comments"); return; }
+  const code=_genCode();
   try{
-    if(navigator.share){
-      await navigator.share({ title:"SplitTrip", text:"Here's our trip on SplitTrip — open the link to import it.", url });
-    } else if(navigator.clipboard?.writeText){
-      await navigator.clipboard.writeText(url); toast("Link copied — paste it to your group ✓");
-    } else { prompt("Copy this share link:", url); }
-  }catch(e){
-    if(e && e.name==="AbortError") return; // user dismissed the share sheet
-    try{ await navigator.clipboard.writeText(url); toast("Link copied ✓"); }
-    catch{ prompt("Copy this share link:", url); }
-  }
+    await firebase.database().ref('trips/'+code).set(_stateForPush());
+    await _doJoin(code);
+  }catch(e){ console.error(e); toast("Couldn't create trip — check Firebase config"); }
 }
-async function loadSharedTrip(){
-  const m = location.hash.match(/^#trip=([01])(.+)$/);
-  if(!m) return;
-  let incoming;
+async function joinTrip(code){
+  if(!FB_READY){ toast("Configure Firebase first"); return; }
+  code=(code||"").trim().toUpperCase();
+  if(code.length!==6){ toast("Enter the 6-character trip code"); return; }
   try{
-    const bytes=_b64urlDec(m[2]);
-    const json = m[1]==="1" ? await _gunzip(bytes) : new TextDecoder().decode(bytes);
-    incoming = JSON.parse(json);
-    if(!incoming || !Array.isArray(incoming.people) || !Array.isArray(incoming.bills)) throw 0;
-  }catch{
-    history.replaceState(null,"",location.pathname+location.search);
-    toast("That share link looks invalid"); return;
-  }
-  history.replaceState(null,"",location.pathname+location.search); // drop hash so refresh won't re-prompt
-  const hasData = state.people.length || state.bills.length;
-  const ok = confirm(hasData
-    ? "Open this shared trip? It will REPLACE the people and bills currently on this device."
-    : "Open this shared trip and load it onto this device?");
-  if(!ok) return;
-  incoming.bills.forEach(b=>{ if(b.participants) b.participants=[...b.participants]; });
-  state = incoming;
-  if(!state.settings) state.settings={currency:"$"};
-  save(); draft=freshDraft(); activeTab="history"; toast("Trip loaded ✓");
+    const snap=await firebase.database().ref('trips/'+code).once('value');
+    if(!snap.exists()){ toast('Trip "'+code+'" not found'); return; }
+    const hasLocal=state.people.length||state.bills.length;
+    const ok=!hasLocal||confirm("Joining will replace the local bills on this device. Continue?");
+    if(!ok) return;
+    await _doJoin(code);
+  }catch(e){ console.error(e); toast("Couldn't join — check your connection"); }
+}
+async function _doJoin(code){
+  if(syncRef) syncRef.off();
+  syncRef=firebase.database().ref('trips/'+code);
+  const snap=await syncRef.once('value');
+  state=snap.val()||state;
+  if(!state.settings) state.settings={currency:'$'};
+  localStorage.setItem(KEY,JSON.stringify(state));
+  draft=freshDraft(); syncId=code;
+  localStorage.setItem(KEY+'.sync',code);
+  syncRef.on('value',snap=>{
+    const d=snap.val(); if(!d) return;
+    clearTimeout(_syncDebounce);
+    _syncDebounce=setTimeout(()=>{
+      if(JSON.stringify(d)===JSON.stringify(state)) return; // own echo
+      if(activeTab==='add'&&(draft.description||draft.items.length||draft.total)) return;
+      state=d; if(!state.settings) state.settings={currency:'$'};
+      localStorage.setItem(KEY,JSON.stringify(state));
+      render(); toast("Trip updated");
+    },300);
+  });
+  history.replaceState(null,'',location.pathname+'#join='+code);
+  render(); toast('Connected to trip '+code+' ✓');
+}
+function leaveTrip(){
+  if(!confirm("Leave this shared trip? Local data stays but changes won't sync.")) return;
+  if(syncRef){ syncRef.off(); syncRef=null; }
+  syncId=null; localStorage.removeItem(KEY+'.sync');
+  history.replaceState(null,'',location.pathname);
+  render(); toast("Left trip");
+}
+async function copyTripLink(){
+  const url=location.origin+location.pathname+'#join='+syncId;
+  try{
+    if(navigator.share){ await navigator.share({title:"SplitTrip",text:"Join our trip on SplitTrip!",url}); return; }
+    await navigator.clipboard.writeText(url); toast("Link copied ✓");
+  }catch(e){ if(e?.name==="AbortError") return; prompt("Share this link:",url); }
+}
+async function _resumeSync(){
+  const saved=localStorage.getItem(KEY+'.sync');
+  const m=!saved && location.hash.match(/^#join=([A-Z0-9]{6})$/i);
+  if(saved) await joinTrip(saved).catch(()=>{});
+  else if(m) await joinTrip(m[1]).catch(()=>{});
 }
 
 /* ---------------- OCR ---------------- */
@@ -1175,7 +1248,7 @@ if("serviceWorker" in navigator && location.protocol==="https:"){
   navigator.serviceWorker.register("sw.js").catch(()=>{});
 }
 
-(async()=>{ await loadSharedTrip(); render(); })();
+(async()=>{ if(FB_READY) await _resumeSync(); render(); })();
 </script>
 </body>
 </html>
