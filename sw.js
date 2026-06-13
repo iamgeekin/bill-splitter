@@ -1,6 +1,6 @@
 /* Simple offline cache for SplitTrip. App shell is cached; OCR engine is
    fetched from a CDN on first use and then cached by the browser. */
-const CACHE = "splittrip-v4";
+const CACHE = "splittrip-v5";
 const ASSETS = [
   "./",
   "./index.html",

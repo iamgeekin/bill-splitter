@@ -858,6 +858,13 @@ function renderPeople(){
       ${CURRENCIES.map(s=>`<span class="chip ${cur()===s?'on':''}" data-cur="${esc(s)}">${esc(s)}</span>`).join("")}
     </div></div>
 
+    <h2 class="section">Share with your group</h2>
+    <div class="card">
+      <div class="row"><div class="grow"><div>Share this trip</div><div class="muted small">Creates a snapshot link your group can open & import</div></div>
+        <button class="btn sm" data-share="1">Share</button></div>
+    </div>
+    <div class="hint">The link carries a snapshot of the current people &amp; bills. It's a copy, not a live sync — re-share anytime to send the latest.</div>
+
     <h2 class="section">Your data</h2>
     <div class="card">
       <div class="row"><div class="grow"><div>Backup / export</div><div class="muted small">Save a JSON file of all bills</div></div>
@@ -911,6 +918,7 @@ function bind(){
     const p=state.people.find(x=>x.id===el.dataset.setphone); if(p){ p.phone=el.value.trim(); save(); }
   });
   view.querySelectorAll("[data-cur]").forEach(el=> el.onclick=()=>{ state.settings.currency=el.dataset.cur; save(); render(); });
+  const sh=view.querySelector("[data-share]"); if(sh) sh.onclick=shareTrip;
   const ex=view.querySelector("[data-export]"); if(ex) ex.onclick=exportData;
   const im=view.querySelector("[data-import]"); if(im) im.onclick=importData;
   const rs=view.querySelector("[data-reset]"); if(rs) rs.onclick=resetAll;
@@ -1018,6 +1026,78 @@ function importData(){
   f.click();
 }
 
+/* ---------------- Share via link (snapshot in URL hash) ----------------
+   The whole trip is gzip-compressed (when the browser supports it) and
+   base64url-encoded into the URL fragment. The fragment is never sent to
+   the server, so the snapshot stays between the people sharing the link. */
+function _b64urlEnc(bytes){
+  let s=""; for(let i=0;i<bytes.length;i++) s+=String.fromCharCode(bytes[i]);
+  return btoa(s).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+}
+function _b64urlDec(str){
+  str=str.replace(/-/g,"+").replace(/_/g,"/"); while(str.length%4) str+="=";
+  const bin=atob(str), out=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i);
+  return out;
+}
+async function _gzip(str){
+  const cs=new CompressionStream("gzip"), w=cs.writable.getWriter();
+  w.write(new TextEncoder().encode(str)); w.close();
+  return new Uint8Array(await new Response(cs.readable).arrayBuffer());
+}
+async function _gunzip(bytes){
+  const ds=new DecompressionStream("gzip"), w=ds.writable.getWriter();
+  w.write(bytes); w.close();
+  return new TextDecoder().decode(await new Response(ds.readable).arrayBuffer());
+}
+async function buildShareUrl(){
+  const json=JSON.stringify(state);
+  let flag, payload;
+  if(typeof CompressionStream==="function"){ flag="1"; payload=_b64urlEnc(await _gzip(json)); }
+  else { flag="0"; payload=_b64urlEnc(new TextEncoder().encode(json)); }
+  return location.origin + location.pathname + "#trip=" + flag + payload;
+}
+async function shareTrip(){
+  if(!state.people.length && !state.bills.length){ toast("Add people or bills first"); return; }
+  let url;
+  try{ url=await buildShareUrl(); }catch{ toast("Couldn't create link"); return; }
+  try{
+    if(navigator.share){
+      await navigator.share({ title:"SplitTrip", text:"Here's our trip on SplitTrip — open the link to import it.", url });
+    } else if(navigator.clipboard?.writeText){
+      await navigator.clipboard.writeText(url); toast("Link copied — paste it to your group ✓");
+    } else { prompt("Copy this share link:", url); }
+  }catch(e){
+    if(e && e.name==="AbortError") return; // user dismissed the share sheet
+    try{ await navigator.clipboard.writeText(url); toast("Link copied ✓"); }
+    catch{ prompt("Copy this share link:", url); }
+  }
+}
+async function loadSharedTrip(){
+  const m = location.hash.match(/^#trip=([01])(.+)$/);
+  if(!m) return;
+  let incoming;
+  try{
+    const bytes=_b64urlDec(m[2]);
+    const json = m[1]==="1" ? await _gunzip(bytes) : new TextDecoder().decode(bytes);
+    incoming = JSON.parse(json);
+    if(!incoming || !Array.isArray(incoming.people) || !Array.isArray(incoming.bills)) throw 0;
+  }catch{
+    history.replaceState(null,"",location.pathname+location.search);
+    toast("That share link looks invalid"); return;
+  }
+  history.replaceState(null,"",location.pathname+location.search); // drop hash so refresh won't re-prompt
+  const hasData = state.people.length || state.bills.length;
+  const ok = confirm(hasData
+    ? "Open this shared trip? It will REPLACE the people and bills currently on this device."
+    : "Open this shared trip and load it onto this device?");
+  if(!ok) return;
+  incoming.bills.forEach(b=>{ if(b.participants) b.participants=[...b.participants]; });
+  state = incoming;
+  if(!state.settings) state.settings={currency:"$"};
+  save(); draft=freshDraft(); activeTab="history"; toast("Trip loaded ✓");
+}
+
 /* ---------------- OCR ---------------- */
 const fileInput = $("#file");
 function startScan(){ fileInput.value=""; fileInput.click(); }
@@ -1095,7 +1175,7 @@ if("serviceWorker" in navigator && location.protocol==="https:"){
   navigator.serviceWorker.register("sw.js").catch(()=>{});
 }
 
-render();
+(async()=>{ await loadSharedTrip(); render(); })();
 </script>
 </body>
 </html>
