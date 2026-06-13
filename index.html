@@ -399,6 +399,7 @@ nav.tabs svg{width:25px;height:25px;}
 details.bill-det summary{list-style:none;cursor:pointer;}
 details.bill-det summary::-webkit-details-marker{display:none;}
 .kbd{font-size:12px;color:var(--muted);}
+.fx-rate{font-size:13px;color:var(--muted);padding:2px 16px 14px;line-height:1.6;}
 </style>
 </head>
 <body>
@@ -438,6 +439,7 @@ let activeTab = "add";
 let draft = freshDraft();
 let historyFilter = "all";       // all | unpaid | paid
 let settleSelection = null;      // null = auto (all unpaid); else Set of bill ids
+let settleFx = { to: null, rate: null, loading: false, error: false };
 
 function freshDraft(){
   return { id:null, description:"", date:today(), payerId:(state?.people[0]?.id||null),
@@ -446,6 +448,8 @@ function freshDraft(){
 
 /* ---------------- Money helpers ---------------- */
 const cur = () => state.settings.currency || "$";
+const ISO = {'$':'USD','€':'EUR','£':'GBP','¥':'JPY','฿':'THB','A$':'AUD','C$':'CAD','S$':'SGD','Rp':'IDR'};
+const CURRENCIES = ["$","€","£","¥","฿","A$","C$","S$","Rp"];
 const toCents = v => Math.round((parseFloat(v)||0)*100);
 const money = c => cur() + (c/100).toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2});
 
@@ -748,11 +752,36 @@ function renderSettle(){
   const {bal, tx} = settle(unpaid);
   const totUnpaid = unpaid.reduce((a,b)=>a+b.totalCents,0);
 
+  // Amount formatter — applies live FX rate when one is loaded
+  const fm = (cents) => {
+    if(settleFx.rate && settleFx.to){
+      const v = (cents/100)*settleFx.rate;
+      return settleFx.to + v.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+    }
+    return money(cents);
+  };
+
+  // Build currency converter card
+  const otherCurs = CURRENCIES.filter(s=>s!==cur());
+  const fxCard = `
+    <h2 class="section">Currency converter</h2>
+    <div class="card">
+      <div class="people-pick" id="fx-pick">
+        <span class="chip ${!settleFx.to?'on':''}" data-fx="">${esc(cur())} <span style="opacity:.7;font-size:13px">base</span></span>
+        ${otherCurs.map(s=>`<span class="chip ${settleFx.to===s?'on':''}" data-fx="${esc(s)}">${esc(s)}</span>`).join("")}
+      </div>
+      ${settleFx.loading?`<div class="hint" style="padding-bottom:12px">Fetching live rates…</div>`:''}
+      ${settleFx.error?`<div class="hint" style="color:var(--red);padding-bottom:12px">Could not fetch rates — check your connection.</div>`:''}
+      ${(settleFx.rate&&settleFx.to)?`<div class="fx-rate">1 ${ISO[cur()]||cur()} = ${settleFx.rate.toLocaleString(undefined,{minimumFractionDigits:4,maximumFractionDigits:4})} ${ISO[settleFx.to]||settleFx.to}&nbsp;&nbsp;<span class="muted small">· Frankfurter · ECB reference rate</span></div>`:''}
+    </div>`;
+
   view.innerHTML = `
     <div class="card"><div class="split-preview">
       <div class="pr"><b>${unpaid.length} unpaid bill${unpaid.length>1?'s':''}</b><b>${money(totUnpaid)}</b></div>
       <div class="pr"><span>Suggested payments</span><span>${tx.length}</span></div>
     </div></div>
+
+    ${fxCard}
 
     <h2 class="section">Who pays whom</h2>
     <div class="card">
@@ -760,7 +789,7 @@ function renderSettle(){
         <div class="settle-row">
           <div class="who">${avatar(t.from)}<span>${esc(personName(t.from).split(' ')[0])}</span>
             <span class="arrow">→</span>${avatar(t.to)}<span>${esc(personName(t.to).split(' ')[0])}</span></div>
-          <div class="amt">${money(t.amt)}</div>
+          <div class="amt">${fm(t.amt)}</div>
         </div>`).join("")
         : `<div class="hint" style="padding:16px">Everyone's even — no payments needed.</div>`}
     </div>
@@ -771,7 +800,7 @@ function renderSettle(){
         <div class="row">
           <div class="grow">${esc(p.name)}</div>
           <div class="amt ${bal[p.id]>0?'bal-pos':'bal-neg'}">
-            ${bal[p.id]>0? 'gets back '+money(bal[p.id]) : 'owes '+money(-bal[p.id])}</div>
+            ${bal[p.id]>0? 'gets back '+fm(bal[p.id]) : 'owes '+fm(-bal[p.id])}</div>
         </div>`).join("") || '<div class="hint" style="padding:16px">Everyone is even.</div>'}
     </div>
 
@@ -797,7 +826,7 @@ function renderPeople(){
 
     <h2 class="section">Currency</h2>
     <div class="card"><div class="people-pick">
-      ${["$","€","£","¥","₹","₩","฿","₫","₱","A$","C$"].map(s=>`<span class="chip ${cur()===s?'on':''}" data-cur="${esc(s)}">${esc(s)}</span>`).join("")}
+      ${CURRENCIES.map(s=>`<span class="chip ${cur()===s?'on':''}" data-cur="${esc(s)}">${esc(s)}</span>`).join("")}
     </div></div>
 
     <h2 class="section">Your data</h2>
@@ -833,6 +862,18 @@ function bind(){
   view.querySelectorAll("[data-delbill]").forEach(el=> el.onclick=()=> delBill(el.dataset.delbill));
   // settle
   const sa = view.querySelector("[data-settleall]"); if(sa) sa.onclick=settleAll;
+  view.querySelectorAll("[data-fx]").forEach(el=> el.onclick=()=>{
+    const sym = el.dataset.fx;
+    if(!sym){ settleFx={to:null,rate:null,loading:false,error:false}; renderSettle(); return; }
+    if(settleFx.to===sym && settleFx.rate!=null) return; // already loaded
+    settleFx={to:sym,rate:null,loading:true,error:false};
+    renderSettle();
+    fetchFx(cur(),sym).then(rate=>{
+      if(settleFx.to!==sym) return; // user changed mid-flight
+      settleFx={to:sym,rate,loading:false,error:!rate};
+      renderSettle();
+    });
+  });
   // people
   const ap = view.querySelector("[data-addperson]"); if(ap) ap.onclick=addPerson;
   const np = view.querySelector("#new-person"); if(np) np.onkeydown=e=>{ if(e.key==="Enter") addPerson(); };
@@ -988,6 +1029,20 @@ function parseReceipt(text){
     items.push({name, amount});
   }
   return {items, tax, tip};
+}
+
+/* ---------------- FX rate fetch ---------------- */
+async function fetchFx(fromSym, toSym){
+  const from=ISO[fromSym], to=ISO[toSym];
+  if(!from||!to) return null;
+  if(from===to) return 1;
+  try{
+    // Frankfurter — ECB official daily reference rates, no API key required
+    const r = await fetch(`https://api.frankfurter.dev/v1/latest?from=${from}&to=${to}`);
+    if(!r.ok) throw 0;
+    const d = await r.json();
+    return d.rates?.[to] ?? null;
+  }catch{ return null; }
 }
 
 function loadScript(src){ return new Promise((res,rej)=>{ const s=document.createElement("script");
