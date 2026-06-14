@@ -487,8 +487,9 @@ const KEY = "splittrip.v1";
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now()+"-"+Math.random().toString(16).slice(2));
 const today = () => new Date().toISOString().slice(0,10);
 
-let state = load() || { people:[], bills:[], settings:{currency:"$"} };
+let state = load() || { people:[], bills:[], settings:{currency:"$"}, payments:[] };
 function load(){ try{ return JSON.parse(localStorage.getItem(KEY)); }catch{ return null; } }
+if(!state.payments) state.payments = [];
 function save(){
   localStorage.setItem(KEY, JSON.stringify(state));
   if(syncRef) syncRef.set(_stateForPush()).catch(()=>{});
@@ -718,12 +719,15 @@ function renderAdd(){
 }
 
 function renderItems(){
-  if(!draft.items.length) return `<div class="hint" style="padding:14px 16px">No items yet.</div>`;
-  return draft.items.map((it,idx)=>`
+  if(!draft.items.length) return `<div class="hint" style="padding:14px 16px">No items yet. Tap＋ or scan a receipt.</div>`;
+  return draft.items.map((it,idx)=>{
+    const allOn = state.people.length>0 && it.sharedBy.length===state.people.length;
+    return `
     <div class="item-row">
       <div class="nm">
         <input class="inp" data-itemname="${idx}" placeholder="Item name" value="${esc(it.name)}" style="margin-bottom:6px">
         <div class="item-people">
+          <span class="mini-chip ${allOn?'on':''}" data-itemall="${idx}" style="font-weight:700">All</span>
           ${state.people.map(p=>`<span class="mini-chip ${it.sharedBy.includes(p.id)?'on':''}" data-itemshare="${idx}:${p.id}">${esc(p.name)}</span>`).join("")}
         </div>
       </div>
@@ -731,7 +735,8 @@ function renderItems(){
         <input class="inp" data-itemamt="${idx}" inputmode="decimal" placeholder="0.00" value="${esc(it.amount)}" style="text-align:right">
       </div>
       <button class="del-x" data-delitem="${idx}">×</button>
-    </div>`).join("");
+    </div>`;
+  }).join("");
 }
 
 function buildBillFromDraft(){
@@ -755,12 +760,23 @@ function updatePreview(){
   const b = buildBillFromDraft();
   const shares = computeShares(b);
   const ids = Object.keys(shares);
-  if(!b.totalCents || !ids.length){
-    pv.innerHTML = `<div class="muted small">Pick people and an amount to see the split.</div>`; return;
-  }
   const dc = draft.currency||cur();
+  if(!b.totalCents || !ids.length){
+    pv.innerHTML = `<div class="muted small">${draft.mode==='items'?'Assign people to items to see the split.':'Pick people and an amount to see the split.'}</div>`; return;
+  }
   let rows = `<div class="pr"><b>Total</b><b>${money(b.totalCents,dc)}</b></div>`;
-  rows += ids.map(id=>`<div class="pr"><span>${esc(personName(id))}</span><span>${money(shares[id],dc)}</span></div>`).join("");
+  if(draft.mode==='items'){
+    rows += ids.map(id=>{
+      const myItems = (b.items||[]).filter(it=>it.sharedBy.includes(id)&&it.amountCents>0);
+      const names = myItems.map(it=>esc(it.name||'Item')).join(' · ');
+      return `<div class="pr" style="flex-direction:column;align-items:stretch;gap:1px;padding:4px 0">
+        <div style="display:flex;justify-content:space-between"><span>${esc(personName(id))}</span><b>${money(shares[id],dc)}</b></div>
+        ${names?`<div class="muted small" style="font-size:12px">${names}</div>`:''}
+      </div>`;
+    }).join("");
+  } else {
+    rows += ids.map(id=>`<div class="pr"><span>${esc(personName(id))}</span><span>${money(shares[id],dc)}</span></div>`).join("");
+  }
   pv.innerHTML = rows;
 }
 
@@ -852,7 +868,7 @@ function renderSettle(){
 
   // When all bill currencies have rates loaded, recompute bal+tx in target currency
   const hasAllRates = mixedCurs && !!settleFx.to && billCurs.every(s => settleFx.rates[s] != null);
-  let displayBal = bal, displayTx = tx, displayCur = settleCur;
+  let displayBal = bal, displayCur = settleCur;
   if(hasAllRates){
     const convBal = {};
     state.people.forEach(p => {
@@ -861,9 +877,17 @@ function renderSettle(){
         convBal[p.id] += Math.round(cents * settleFx.rates[sym]);
     });
     displayBal = convBal;
-    displayTx = settleTx({...convBal});
     displayCur = settleFx.to;
   }
+
+  // Apply recorded payments (in displayCur) on top of the computed balance
+  for(const p of state.payments){
+    if(p.currency===displayCur && p.from in displayBal && p.to in displayBal){
+      displayBal[p.from] += p.amtCents;
+      displayBal[p.to]   -= p.amtCents;
+    }
+  }
+  let displayTx = settleTx({...displayBal});
 
   // Amount formatter
   const fm = (cents) => {
@@ -951,10 +975,11 @@ function renderSettle(){
           const msg = encodeURIComponent(`Hi ${fromFirst}! You owe ${toFirst} ${fm(t.amt)} — please pay when you can 🙏`);
           return `<a class="wa-btn" href="https://wa.me/${phone}?text=${msg}" target="_blank" rel="noopener" title="Send WhatsApp reminder"><svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg></a>`;
         })() : '';
+        const payBtn = `<button class="btn sec sm" data-recordpmt="${t.from}|${t.to}|${t.amt}|${esc(displayCur)}" title="Record this payment as done" style="flex-shrink:0;padding:6px 12px;font-size:13px">✓ Paid</button>`;
         return `<div class="settle-row">
           <div class="who">${avatar(t.from)}<span>${esc(personName(t.from).split(' ')[0])}</span>
             <span class="arrow">→</span>${avatar(t.to)}<span>${esc(personName(t.to).split(' ')[0])}</span></div>
-          <div class="amt">${fm(t.amt)}</div>${waBtn}
+          <div class="amt">${fm(t.amt)}</div>${payBtn}${waBtn}
         </div>`;
       }).join("")
         : `<div class="hint" style="padding:16px">Everyone's even — no payments needed.</div>`}
@@ -969,6 +994,22 @@ function renderSettle(){
             ${displayBal[p.id]>0? 'gets back '+fm(displayBal[p.id]) : 'owes '+fm(-displayBal[p.id])}</div>
         </div>`).join("") || '<div class="hint" style="padding:16px">Everyone is even.</div>'}
     </div>
+
+    ${(()=>{
+      const pmts = state.payments.filter(p=>p.currency===displayCur);
+      if(!pmts.length) return '';
+      return `<h2 class="section">Recorded payments</h2>
+      <div class="card">
+        ${pmts.map(p=>`
+          <div class="settle-row">
+            <div class="who">${avatar(p.from)}<span>${esc(personName(p.from).split(' ')[0])}</span>
+              <span class="arrow">→</span>${avatar(p.to)}<span>${esc(personName(p.to).split(' ')[0])}</span></div>
+            <div class="amt bal-pos">${money(p.amtCents,p.currency)}</div>
+            <span class="muted small" style="flex-shrink:0">${p.date.slice(5)}</span>
+            <button class="del-x" data-delpmt="${p.id}" title="Undo payment">×</button>
+          </div>`).join('')}
+      </div>`;
+    })()}
 
     <button class="btn" data-settleall="1">Mark these ${unpaid.length} bill${unpaid.length>1?'s':''} as paid</button>
     <div class="hint">This settles every currently-unpaid bill at once. You can flip any back in History.</div>`;
@@ -1061,6 +1102,15 @@ function bind(){
   view.querySelectorAll("[data-delbill]").forEach(el=> el.onclick=()=> delBill(el.dataset.delbill));
   // settle
   const sa = view.querySelector("[data-settleall]"); if(sa) sa.onclick=settleAll;
+  view.querySelectorAll("[data-recordpmt]").forEach(el=> el.onclick=()=>{
+    const [from,to,amt,currency]=el.dataset.recordpmt.split('|');
+    state.payments.push({id:uid(),from,to,amtCents:+amt,currency,date:today()});
+    save(); renderSettle(); toast("Payment recorded ✓");
+  });
+  view.querySelectorAll("[data-delpmt]").forEach(el=> el.onclick=()=>{
+    state.payments=state.payments.filter(p=>p.id!==el.dataset.delpmt);
+    save(); renderSettle();
+  });
   view.querySelectorAll("[data-fx]").forEach(el=> el.onclick=()=>{
     const sym = el.dataset.fx;
     if(!sym){ settleFx={to:null,rates:{},loading:false,error:false}; renderSettle(); return; }
@@ -1121,8 +1171,13 @@ function bindAdd(){
     renderAdd();
   };
   const add=view.querySelector("[data-additem]"); if(add) add.onclick=()=>{
-    draft.items.push({name:"", amount:"", sharedBy:state.people.map(p=>p.id)}); renderAdd();
+    draft.items.push({name:"", amount:"", sharedBy:[]}); renderAdd();
   };
+  view.querySelectorAll("[data-itemall]").forEach(el=> el.onclick=()=>{
+    const idx=+el.dataset.itemall; const it=draft.items[idx];
+    it.sharedBy = it.sharedBy.length===state.people.length ? [] : state.people.map(p=>p.id);
+    renderAdd();
+  });
   const scan=view.querySelector("[data-scan]"); if(scan) scan.onclick=startScan;
   view.querySelectorAll("[data-itemname]").forEach(el=> el.addEventListener("input",e=>draft.items[+el.dataset.itemname].name=e.target.value));
   view.querySelectorAll("[data-itemamt]").forEach(el=> el.addEventListener("input",e=>{draft.items[+el.dataset.itemamt].amount=e.target.value; updatePreview();}));
@@ -1218,7 +1273,8 @@ function _stableStr(v){
 function _normalizeState(s){
   s = (s && typeof s==="object") ? s : {};
   const arr = x => Array.isArray(x) ? x : (x && typeof x==="object" ? Object.values(x) : []);
-  s.people = arr(s.people);
+  s.people   = arr(s.people);
+  s.payments = arr(s.payments);
   s.bills  = arr(s.bills).map(b=>{
     if(b && typeof b==="object"){
       if("participants" in b) b.participants = arr(b.participants);
