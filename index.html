@@ -487,8 +487,9 @@ const KEY = "splittrip.v1";
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now()+"-"+Math.random().toString(16).slice(2));
 const today = () => new Date().toISOString().slice(0,10);
 
-let state = load() || { people:[], bills:[], settings:{currency:"$"} };
+let state = load() || { people:[], bills:[], settings:{currency:"$"}, payments:[] };
 function load(){ try{ return JSON.parse(localStorage.getItem(KEY)); }catch{ return null; } }
+if(!state.payments) state.payments = [];
 function save(){
   localStorage.setItem(KEY, JSON.stringify(state));
   if(syncRef) syncRef.set(_stateForPush()).catch(()=>{});
@@ -503,7 +504,7 @@ let activeTab = "add";
 let draft = freshDraft();
 let historyFilter = "all";       // all | unpaid | paid
 let settleSelection = null;      // null = auto (all unpaid); else Set of bill ids
-let settleFx = { to: null, rate: null, loading: false, error: false };
+let settleFx = { to: null, rates: {}, loading: false, error: false };
 
 function freshDraft(){
   return { id:null, description:"", date:today(), payerId:(state?.people[0]?.id||null),
@@ -512,8 +513,8 @@ function freshDraft(){
 
 /* ---------------- Money helpers ---------------- */
 const cur = () => state.settings.currency || "$";
-const ISO = {'$':'USD','€':'EUR','£':'GBP','¥':'JPY','฿':'THB','A$':'AUD','C$':'CAD','S$':'SGD','Rp':'IDR'};
-const CURRENCIES = ["$","€","£","¥","฿","A$","C$","S$","Rp"];
+const ISO = {'$':'USD','€':'EUR','£':'GBP','¥':'JPY','฿':'THB','A$':'AUD','C$':'CAD','S$':'SGD','Rp':'IDR','₩':'KRW'};
+const CURRENCIES = ["$","€","£","¥","฿","A$","C$","S$","Rp","₩"];
 const toCents = v => Math.round((parseFloat(v)||0)*100);
 const money = (c, sym) => (sym||cur()) + (c/100).toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2});
 
@@ -557,14 +558,7 @@ function computeShares(bill){
 }
 
 /* ---------------- Settlement ---------------- */
-function settle(bills){
-  const bal = {}; // cents: positive = is owed money
-  state.people.forEach(p=> bal[p.id]=0);
-  for(const b of bills){
-    bal[b.payerId] = (bal[b.payerId]||0) + b.totalCents;
-    const shares = computeShares(b);
-    for(const pid in shares){ bal[pid] = (bal[pid]||0) - shares[pid]; }
-  }
+function settleTx(bal){
   const creditors=[], debtors=[];
   for(const id in bal){
     if(bal[id]>0) creditors.push({id, amt:bal[id]});
@@ -579,7 +573,30 @@ function settle(bills){
     if(debtors[i].amt===0) i++;
     if(creditors[j].amt===0) j++;
   }
-  return {bal, tx};
+  return tx;
+}
+
+function settle(bills){
+  const bal = {}; // cents: positive = is owed money
+  state.people.forEach(p=> bal[p.id]=0);
+  for(const b of bills){
+    bal[b.payerId] = (bal[b.payerId]||0) + b.totalCents;
+    const shares = computeShares(b);
+    for(const pid in shares){ bal[pid] = (bal[pid]||0) - shares[pid]; }
+  }
+  return {bal, tx: settleTx({...bal})};
+}
+
+function computeBalByCur(bills){
+  const out = {};
+  state.people.forEach(p=> out[p.id]={});
+  for(const b of bills){
+    const bc = b.currency||cur();
+    out[b.payerId][bc] = (out[b.payerId][bc]||0) + b.totalCents;
+    const shares = computeShares(b);
+    for(const pid in shares) out[pid][bc] = (out[pid][bc]||0) - shares[pid];
+  }
+  return out;
 }
 
 /* ---------------- People helpers ---------------- */
@@ -702,12 +719,15 @@ function renderAdd(){
 }
 
 function renderItems(){
-  if(!draft.items.length) return `<div class="hint" style="padding:14px 16px">No items yet.</div>`;
-  return draft.items.map((it,idx)=>`
+  if(!draft.items.length) return `<div class="hint" style="padding:14px 16px">No items yet. Tap＋ or scan a receipt.</div>`;
+  return draft.items.map((it,idx)=>{
+    const allOn = state.people.length>0 && it.sharedBy.length===state.people.length;
+    return `
     <div class="item-row">
       <div class="nm">
         <input class="inp" data-itemname="${idx}" placeholder="Item name" value="${esc(it.name)}" style="margin-bottom:6px">
         <div class="item-people">
+          <span class="mini-chip ${allOn?'on':''}" data-itemall="${idx}" style="font-weight:700">All</span>
           ${state.people.map(p=>`<span class="mini-chip ${it.sharedBy.includes(p.id)?'on':''}" data-itemshare="${idx}:${p.id}">${esc(p.name)}</span>`).join("")}
         </div>
       </div>
@@ -715,7 +735,8 @@ function renderItems(){
         <input class="inp" data-itemamt="${idx}" inputmode="decimal" placeholder="0.00" value="${esc(it.amount)}" style="text-align:right">
       </div>
       <button class="del-x" data-delitem="${idx}">×</button>
-    </div>`).join("");
+    </div>`;
+  }).join("");
 }
 
 function buildBillFromDraft(){
@@ -739,12 +760,23 @@ function updatePreview(){
   const b = buildBillFromDraft();
   const shares = computeShares(b);
   const ids = Object.keys(shares);
-  if(!b.totalCents || !ids.length){
-    pv.innerHTML = `<div class="muted small">Pick people and an amount to see the split.</div>`; return;
-  }
   const dc = draft.currency||cur();
+  if(!b.totalCents || !ids.length){
+    pv.innerHTML = `<div class="muted small">${draft.mode==='items'?'Assign people to items to see the split.':'Pick people and an amount to see the split.'}</div>`; return;
+  }
   let rows = `<div class="pr"><b>Total</b><b>${money(b.totalCents,dc)}</b></div>`;
-  rows += ids.map(id=>`<div class="pr"><span>${esc(personName(id))}</span><span>${money(shares[id],dc)}</span></div>`).join("");
+  if(draft.mode==='items'){
+    rows += ids.map(id=>{
+      const myItems = (b.items||[]).filter(it=>it.sharedBy.includes(id)&&it.amountCents>0);
+      const names = myItems.map(it=>esc(it.name||'Item')).join(' · ');
+      return `<div class="pr" style="flex-direction:column;align-items:stretch;gap:1px;padding:4px 0">
+        <div style="display:flex;justify-content:space-between"><span>${esc(personName(id))}</span><b>${money(shares[id],dc)}</b></div>
+        ${names?`<div class="muted small" style="font-size:12px">${names}</div>`:''}
+      </div>`;
+    }).join("");
+  } else {
+    rows += ids.map(id=>`<div class="pr"><span>${esc(personName(id))}</span><span>${money(shares[id],dc)}</span></div>`).join("");
+  }
   pv.innerHTML = rows;
 }
 
@@ -831,17 +863,57 @@ function renderSettle(){
   const settleCur = billCurs.length===1 ? billCurs[0] : cur();
   const mixedCurs = billCurs.length > 1;
 
-  // Amount formatter — applies live FX rate when one is loaded
-  const fm = (cents) => {
-    if(settleFx.rate && settleFx.to){
-      const v = (cents/100)*settleFx.rate;
-      return settleFx.to + v.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  // Per-currency per-person balances (for breakdown and conversion)
+  const bbc = computeBalByCur(unpaid);
+
+  // When all bill currencies have rates loaded, recompute bal+tx in target currency
+  const hasAllRates = mixedCurs && !!settleFx.to && billCurs.every(s => settleFx.rates[s] != null);
+  let displayBal = bal, displayCur = settleCur;
+  if(hasAllRates){
+    const convBal = {};
+    state.people.forEach(p => {
+      convBal[p.id] = 0;
+      for(const [sym, cents] of Object.entries(bbc[p.id]||{}))
+        convBal[p.id] += Math.round(cents * settleFx.rates[sym]);
+    });
+    displayBal = convBal;
+    displayCur = settleFx.to;
+  }
+
+  // Apply recorded payments (in displayCur) on top of the computed balance
+  for(const p of state.payments){
+    if(p.currency===displayCur && p.from in displayBal && p.to in displayBal){
+      displayBal[p.from] += p.amtCents;
+      displayBal[p.to]   -= p.amtCents;
     }
-    return money(cents, settleCur);
+  }
+  let displayTx = settleTx({...displayBal});
+
+  // Amount formatter
+  const fm = (cents) => {
+    if(settleFx.to){
+      if(hasAllRates)
+        return settleFx.to + (cents/100).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+      if(!mixedCurs && settleFx.rates[settleCur] != null){
+        const v = (cents/100)*settleFx.rates[settleCur];
+        return settleFx.to + v.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+      }
+    }
+    return money(cents, displayCur);
   };
 
   // Build currency converter card
   const otherCurs = CURRENCIES.filter(s=>s!==settleCur);
+  let rateLines = '';
+  if(settleFx.to && !settleFx.loading && !settleFx.error){
+    if(mixedCurs){
+      rateLines = billCurs.filter(s=>settleFx.rates[s]!=null).map(s=>
+        `<div class="fx-rate">1 ${ISO[s]||s} = ${settleFx.rates[s].toLocaleString(undefined,{minimumFractionDigits:4,maximumFractionDigits:4})} ${ISO[settleFx.to]||settleFx.to}&nbsp;&nbsp;<span class="muted small">· Frankfurter · ECB</span></div>`
+      ).join('');
+    } else if(settleFx.rates[settleCur]!=null){
+      rateLines = `<div class="fx-rate">1 ${ISO[settleCur]||settleCur} = ${settleFx.rates[settleCur].toLocaleString(undefined,{minimumFractionDigits:4,maximumFractionDigits:4})} ${ISO[settleFx.to]||settleFx.to}&nbsp;&nbsp;<span class="muted small">· Frankfurter · ECB reference rate</span></div>`;
+    }
+  }
   const fxCard = `
     <h2 class="section">Currency converter</h2>
     <div class="card">
@@ -851,23 +923,50 @@ function renderSettle(){
       </div>
       ${settleFx.loading?`<div class="hint" style="padding-bottom:12px">Fetching live rates…</div>`:''}
       ${settleFx.error?`<div class="hint" style="color:var(--red);padding-bottom:12px">Could not fetch rates — check your connection.</div>`:''}
-      ${(settleFx.rate&&settleFx.to)?`<div class="fx-rate">1 ${ISO[settleCur]||settleCur} = ${settleFx.rate.toLocaleString(undefined,{minimumFractionDigits:4,maximumFractionDigits:4})} ${ISO[settleFx.to]||settleFx.to}&nbsp;&nbsp;<span class="muted small">· Frankfurter · ECB reference rate</span></div>`:''}
+      ${rateLines}
     </div>`;
 
-  const mixedBanner = mixedCurs ? `<div class="hint" style="color:var(--red);margin-top:4px">⚠️ Bills are in multiple currencies (${billCurs.join(', ')}) — settlement totals are combined using face value. Use the converter below to compare in a single currency.</div>` : '';
+  const mixedBanner = mixedCurs && !hasAllRates ? `<div class="hint" style="color:var(--red);margin-top:4px">⚠️ Bills are in multiple currencies (${billCurs.join(', ')}) — select a target currency below to see totals converted to a single currency.</div>` : '';
+
+  // Per-currency breakdown section (shown when mixed + at least one rate loaded)
+  let breakdownSection = '';
+  if(mixedCurs && settleFx.to && !settleFx.loading){
+    const rows = state.people.map(p=>{
+      const entries = Object.entries(bbc[p.id]||{}).filter(([,c])=>c!==0);
+      if(!entries.length) return '';
+      const lines = entries.map(([sym,cents])=>{
+        const rate = settleFx.rates[sym];
+        const isPos = cents > 0;
+        const label = isPos ? 'gets back' : 'owes';
+        if(rate!=null){
+          const converted = Math.abs(Math.round(cents*rate));
+          return `<div class="hint" style="padding:2px 0 2px 32px">${label} ${money(Math.abs(cents),sym)} × ${rate.toLocaleString(undefined,{minimumFractionDigits:4,maximumFractionDigits:4})} = ${settleFx.to}${(converted/100).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>`;
+        }
+        return `<div class="hint" style="padding:2px 0 2px 32px">${label} ${money(Math.abs(cents),sym)} <span style="opacity:.6">(rate unavailable)</span></div>`;
+      }).join('');
+      const totalLine = entries.length>1 && hasAllRates
+        ? `<div style="padding:4px 0 0 32px;font-weight:600">= ${money(Math.abs(displayBal[p.id]),settleFx.to)} total</div>` : '';
+      return `<div class="row" style="flex-direction:column;align-items:flex-start;padding:12px 16px;gap:2px">
+        <div style="font-weight:600">${avatar(p.id)} ${esc(personName(p.id))}</div>
+        ${lines}${totalLine}
+      </div>`;
+    }).filter(Boolean).join('');
+    if(rows) breakdownSection = `<h2 class="section">Currency breakdown</h2><div class="card">${rows}</div>`;
+  }
 
   view.innerHTML = `
     <div class="card"><div class="split-preview">
       <div class="pr"><b>${unpaid.length} unpaid bill${unpaid.length>1?'s':''}</b><b>${money(totUnpaid, settleCur)}</b></div>
-      <div class="pr"><span>Suggested payments</span><span>${tx.length}</span></div>
+      <div class="pr"><span>Suggested payments</span><span>${displayTx.length}</span></div>
     </div></div>
 
     ${mixedBanner}
     ${fxCard}
+    ${breakdownSection}
 
     <h2 class="section">Who pays whom</h2>
     <div class="card">
-      ${tx.length? tx.map(t=>{
+      ${displayTx.length? displayTx.map(t=>{
         const debtor = state.people.find(p=>p.id===t.from);
         const waBtn = debtor?.phone ? (()=>{
           const phone = debtor.phone.replace(/\D/g,'');
@@ -876,10 +975,11 @@ function renderSettle(){
           const msg = encodeURIComponent(`Hi ${fromFirst}! You owe ${toFirst} ${fm(t.amt)} — please pay when you can 🙏`);
           return `<a class="wa-btn" href="https://wa.me/${phone}?text=${msg}" target="_blank" rel="noopener" title="Send WhatsApp reminder"><svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg></a>`;
         })() : '';
+        const payBtn = `<button class="btn sec sm" data-recordpmt="${t.from}|${t.to}|${t.amt}|${esc(displayCur)}" title="Record this payment as done" style="flex-shrink:0;padding:6px 12px;font-size:13px">✓ Paid</button>`;
         return `<div class="settle-row">
           <div class="who">${avatar(t.from)}<span>${esc(personName(t.from).split(' ')[0])}</span>
             <span class="arrow">→</span>${avatar(t.to)}<span>${esc(personName(t.to).split(' ')[0])}</span></div>
-          <div class="amt">${fm(t.amt)}</div>${waBtn}
+          <div class="amt">${fm(t.amt)}</div>${payBtn}${waBtn}
         </div>`;
       }).join("")
         : `<div class="hint" style="padding:16px">Everyone's even — no payments needed.</div>`}
@@ -887,13 +987,29 @@ function renderSettle(){
 
     <h2 class="section">Net balance</h2>
     <div class="card">
-      ${state.people.filter(p=>bal[p.id]).map(p=>`
+      ${state.people.filter(p=>displayBal[p.id]).map(p=>`
         <div class="row">
           <div class="grow">${esc(p.name)}</div>
-          <div class="amt ${bal[p.id]>0?'bal-pos':'bal-neg'}">
-            ${bal[p.id]>0? 'gets back '+fm(bal[p.id]) : 'owes '+fm(-bal[p.id])}</div>
+          <div class="amt ${displayBal[p.id]>0?'bal-pos':'bal-neg'}">
+            ${displayBal[p.id]>0? 'gets back '+fm(displayBal[p.id]) : 'owes '+fm(-displayBal[p.id])}</div>
         </div>`).join("") || '<div class="hint" style="padding:16px">Everyone is even.</div>'}
     </div>
+
+    ${(()=>{
+      const pmts = state.payments.filter(p=>p.currency===displayCur);
+      if(!pmts.length) return '';
+      return `<h2 class="section">Recorded payments</h2>
+      <div class="card">
+        ${pmts.map(p=>`
+          <div class="settle-row">
+            <div class="who">${avatar(p.from)}<span>${esc(personName(p.from).split(' ')[0])}</span>
+              <span class="arrow">→</span>${avatar(p.to)}<span>${esc(personName(p.to).split(' ')[0])}</span></div>
+            <div class="amt bal-pos">${money(p.amtCents,p.currency)}</div>
+            <span class="muted small" style="flex-shrink:0">${p.date.slice(5)}</span>
+            <button class="del-x" data-delpmt="${p.id}" title="Undo payment">×</button>
+          </div>`).join('')}
+      </div>`;
+    })()}
 
     <button class="btn" data-settleall="1">Mark these ${unpaid.length} bill${unpaid.length>1?'s':''} as paid</button>
     <div class="hint">This settles every currently-unpaid bill at once. You can flip any back in History.</div>`;
@@ -986,16 +1102,29 @@ function bind(){
   view.querySelectorAll("[data-delbill]").forEach(el=> el.onclick=()=> delBill(el.dataset.delbill));
   // settle
   const sa = view.querySelector("[data-settleall]"); if(sa) sa.onclick=settleAll;
+  view.querySelectorAll("[data-recordpmt]").forEach(el=> el.onclick=()=>{
+    const [from,to,amt,currency]=el.dataset.recordpmt.split('|');
+    state.payments.push({id:uid(),from,to,amtCents:+amt,currency,date:today()});
+    save(); renderSettle(); toast("Payment recorded ✓");
+  });
+  view.querySelectorAll("[data-delpmt]").forEach(el=> el.onclick=()=>{
+    state.payments=state.payments.filter(p=>p.id!==el.dataset.delpmt);
+    save(); renderSettle();
+  });
   view.querySelectorAll("[data-fx]").forEach(el=> el.onclick=()=>{
     const sym = el.dataset.fx;
-    if(!sym){ settleFx={to:null,rate:null,loading:false,error:false}; renderSettle(); return; }
-    if(settleFx.to===sym && settleFx.rate!=null) return; // already loaded
-    settleFx={to:sym,rate:null,loading:true,error:false};
+    if(!sym){ settleFx={to:null,rates:{},loading:false,error:false}; renderSettle(); return; }
+    if(settleFx.to===sym && !settleFx.loading && (Object.keys(settleFx.rates).length>0||settleFx.error)) return; // already loaded
+    settleFx={to:sym,rates:{},loading:true,error:false};
     renderSettle();
-    const unpaidNow=state.bills.filter(b=>!b.paid); const curs=[...new Set(unpaidNow.map(b=>b.currency||cur()))]; const baseCur=curs.length===1?curs[0]:cur();
-    fetchFx(baseCur,sym).then(rate=>{
+    const unpaidNow=state.bills.filter(b=>!b.paid);
+    const curs=[...new Set(unpaidNow.map(b=>b.currency||cur()))];
+    Promise.all(curs.map(c=>fetchFx(c,sym).then(rate=>({c,rate})))).then(results=>{
       if(settleFx.to!==sym) return; // user changed mid-flight
-      settleFx={to:sym,rate,loading:false,error:!rate};
+      const rates={};
+      let hasError=false;
+      results.forEach(({c,rate})=>{ if(rate!=null) rates[c]=rate; else hasError=true; });
+      settleFx={to:sym,rates,loading:false,error:hasError};
       renderSettle();
     });
   });
@@ -1042,8 +1171,13 @@ function bindAdd(){
     renderAdd();
   };
   const add=view.querySelector("[data-additem]"); if(add) add.onclick=()=>{
-    draft.items.push({name:"", amount:"", sharedBy:state.people.map(p=>p.id)}); renderAdd();
+    draft.items.push({name:"", amount:"", sharedBy:[]}); renderAdd();
   };
+  view.querySelectorAll("[data-itemall]").forEach(el=> el.onclick=()=>{
+    const idx=+el.dataset.itemall; const it=draft.items[idx];
+    it.sharedBy = it.sharedBy.length===state.people.length ? [] : state.people.map(p=>p.id);
+    renderAdd();
+  });
   const scan=view.querySelector("[data-scan]"); if(scan) scan.onclick=startScan;
   view.querySelectorAll("[data-itemname]").forEach(el=> el.addEventListener("input",e=>draft.items[+el.dataset.itemname].name=e.target.value));
   view.querySelectorAll("[data-itemamt]").forEach(el=> el.addEventListener("input",e=>{draft.items[+el.dataset.itemamt].amount=e.target.value; updatePreview();}));
@@ -1139,7 +1273,8 @@ function _stableStr(v){
 function _normalizeState(s){
   s = (s && typeof s==="object") ? s : {};
   const arr = x => Array.isArray(x) ? x : (x && typeof x==="object" ? Object.values(x) : []);
-  s.people = arr(s.people);
+  s.people   = arr(s.people);
+  s.payments = arr(s.payments);
   s.bills  = arr(s.bills).map(b=>{
     if(b && typeof b==="object"){
       if("participants" in b) b.participants = arr(b.participants);
