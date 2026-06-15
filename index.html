@@ -1053,6 +1053,10 @@ function renderPeople(){
         <button class="btn sm" data-copylink="1">Copy link</button>
         <button class="btn danger sm" data-leavetrip="1">Leave trip</button>
       </div>
+      <div style="border-top:.5px solid var(--sep);margin-top:12px;padding-top:12px">
+        <div class="muted small" style="margin-bottom:8px">Owner actions</div>
+        <button class="btn danger sm" data-deletetrip="1" style="width:100%">Delete trip for everyone</button>
+      </div>
     </div>` : `
     <div class="card">
       <div class="row"><div class="grow"><div>Start a shared trip</div><div class="muted small">Real-time sync — everyone sees bill changes instantly</div></div>
@@ -1138,6 +1142,7 @@ function bind(){
   view.querySelectorAll("[data-cur]").forEach(el=> el.onclick=()=>{ state.settings.currency=el.dataset.cur; save(); render(); });
   const ct=view.querySelector("[data-createtrip]"); if(ct) ct.onclick=createTrip;
   const lt=view.querySelector("[data-leavetrip]"); if(lt) lt.onclick=leaveTrip;
+  const dt=view.querySelector("[data-deletetrip]"); if(dt) dt.onclick=deleteTrip;
   const cl=view.querySelector("[data-copylink]"); if(cl) cl.onclick=copyTripLink;
   const jt=view.querySelector("[data-jointrip]"); if(jt) jt.onclick=()=>joinTrip(view.querySelector("#join-code")?.value||"");
   const jc=view.querySelector("#join-code"); if(jc){
@@ -1360,6 +1365,22 @@ function leaveTrip(){
     activeTab = "people";
   }
   render(); toast("Left trip");
+}
+async function deleteTrip(){
+  if(!confirm("Delete this trip for EVERYONE?\n\nThis permanently removes all bills and people from the cloud. Other members will lose access immediately.\n\nThis cannot be undone.")) return;
+  const code=syncId;   // capture before disconnect clears it
+  _disconnectSync();   // detach listener first — no further writes from this device
+  // Clear this device's local state
+  state={people:[],bills:[],settings:{currency:cur()},payments:[]};
+  save(); draft=freshDraft(); activeTab="people";
+  try{
+    await firebase.database().ref('trips/'+code).remove();
+    toast("Trip deleted for everyone ✓");
+  }catch(e){
+    console.error(e);
+    toast("Deleted locally — couldn't reach Firebase. Check your connection.");
+  }
+  render();
 }
 async function copyTripLink(){
   const url=location.origin+location.pathname+'#join='+syncId;
