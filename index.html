@@ -43,8 +43,10 @@
   --r-card:20px; --r-pill:999px;
 }
 
+/* Dark tokens — applied by system preference (unless manually overridden to light)
+   or by the user's explicit [data-theme="dark"] toggle.               */
 @media (prefers-color-scheme:dark){
-  :root{
+  :root:not([data-theme="light"]){
     --bg-mesh: #131720;
     --card:rgba(255,255,255,.07);
     --card2:rgba(255,255,255,.045);
@@ -60,6 +62,23 @@
     --text:#f0f0ff; --muted:#8080a0;
     --sep:rgba(255,255,255,.07);
   }
+}
+/* Manual dark override — wins even on a light-mode system */
+:root[data-theme="dark"]{
+  --bg-mesh: #131720;
+  --card:rgba(255,255,255,.07);
+  --card2:rgba(255,255,255,.045);
+  --glass-border:rgba(255,255,255,.10);
+  --shadow:
+    0 8px 40px rgba(0,0,0,.55),
+    0 2px 10px rgba(0,0,0,.30),
+    inset 0 1px 0 rgba(255,255,255,.07);
+  --navbg:rgba(19,23,32,.92);
+  --chip:rgba(255,255,255,.08);
+  --field:rgba(255,255,255,.07);
+  --fieldb:rgba(255,255,255,.10);
+  --text:#f0f0ff; --muted:#8080a0;
+  --sep:rgba(255,255,255,.07);
 }
 
 /* ── Reset ── */
@@ -86,8 +105,17 @@ header.bar{
   padding:calc(env(safe-area-inset-top) + 12px) 20px 14px;
   border-bottom:.5px solid var(--sep);
 }
+header.bar .bar-inner{display:flex;align-items:center;justify-content:space-between;gap:12px;}
 header.bar h1{font-size:28px;font-weight:700;margin:0;letter-spacing:-.035em;}
 header.bar .sub{font-size:13px;color:var(--muted);margin-top:3px;}
+#theme-toggle{
+  flex-shrink:0;width:36px;height:36px;border-radius:50%;border:1px solid var(--glass-border);
+  background:var(--chip);color:var(--text);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;padding:0;
+  backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);
+  transition:background .2s,border-color .2s;
+}
+#theme-toggle:hover{background:var(--card);}
 
 main{padding:16px 16px 28px;}
 
@@ -421,12 +449,18 @@ details.bill-det summary::-webkit-details-marker{display:none;}
 .kbd{font-size:12px;color:var(--muted);}
 .fx-rate{font-size:13px;color:var(--muted);padding:2px 16px 14px;line-height:1.6;}
 </style>
+<script>(function(){const t=localStorage.getItem('splittrip.v1.theme');if(t)document.documentElement.dataset.theme=t;})();</script>
 </head>
 <body>
 <div id="app">
   <header class="bar">
-    <h1 id="h-title">Add a Bill</h1>
-    <div class="sub" id="h-sub">Split a new expense with your group</div>
+    <div class="bar-inner">
+      <div>
+        <h1 id="h-title">Add a Bill</h1>
+        <div class="sub" id="h-sub">Split a new expense with your group</div>
+      </div>
+      <button id="theme-toggle" onclick="toggleTheme()" aria-label="Toggle dark mode"></button>
+    </div>
   </header>
   <main id="view"></main>
 </div>
@@ -1378,6 +1412,25 @@ async function copyTripLink(){
     await navigator.clipboard.writeText(url); toast("Link copied ✓");
   }catch(e){ if(e?.name==="AbortError") return; prompt("Share this link:",url); }
 }
+/* ── Theme toggle ── */
+const _MOON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>`;
+const _SUN  = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>`;
+function _isDark(){
+  const ov=document.documentElement.dataset.theme;
+  return ov==='dark'||(!ov&&window.matchMedia('(prefers-color-scheme:dark)').matches);
+}
+function _updateThemeIcon(){
+  const btn=document.getElementById('theme-toggle'); if(!btn) return;
+  const dark=_isDark();
+  btn.innerHTML=dark?_SUN:_MOON;
+  btn.setAttribute('aria-label',dark?'Switch to light mode':'Switch to dark mode');
+}
+function toggleTheme(){
+  const next=_isDark()?'light':'dark';
+  document.documentElement.dataset.theme=next;
+  localStorage.setItem(KEY+'.theme',next);
+  _updateThemeIcon();
+}
 async function _resumeSync(){
   const saved=localStorage.getItem(KEY+'.sync');
   const m=!saved && location.hash.match(/^#join=([A-Z0-9]{6})$/i);
@@ -1462,7 +1515,7 @@ if("serviceWorker" in navigator && location.protocol==="https:"){
   navigator.serviceWorker.register("sw.js").catch(()=>{});
 }
 
-(async()=>{ if(FB_READY) await _resumeSync(); render(); })();
+(async()=>{ if(FB_READY) await _resumeSync(); render(); _updateThemeIcon(); })();
 </script>
 </body>
 </html>
