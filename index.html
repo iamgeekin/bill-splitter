@@ -6,35 +6,30 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="SplitTrip">
-<meta name="theme-color" content="#0a84ff" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#060618" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#e8ecf2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#131720" media="(prefers-color-scheme: dark)">
 <title>SplitTrip — Trip Bill Splitter</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon.svg">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <style>
 /* ─────────────────────────────────────────────────────────────
-   APPLE LIQUID GLASS  ·  iOS 26 / macOS Tahoe Design Language
+   APPLE LIQUID GLASS  ·  macOS Slate / Sonoma Design Language
    ───────────────────────────────────────────────────────────── */
 :root{
-  /* Ambient mesh-gradient background */
-  --bg-mesh:
-    radial-gradient(ellipse at 18% 16%, rgba(168,130,255,.44) 0%, transparent 52%),
-    radial-gradient(ellipse at 82%  8%, rgba(79,171,255,.38)  0%, transparent 48%),
-    radial-gradient(ellipse at 56% 88%, rgba(255,100,160,.26) 0%, transparent 52%),
-    radial-gradient(ellipse at 90% 72%, rgba(60,220,180,.30)  0%, transparent 48%),
-    #edf0f8;
+  /* Clean slate background — macOS Sonoma cool blue-gray */
+  --bg-mesh: #e8ecf2;
 
   /* Glass surface tokens */
-  --card:rgba(255,255,255,.72);
-  --card2:rgba(255,255,255,.58);
-  --glass-border:rgba(255,255,255,.75);
-  --glass-blur:saturate(200%) blur(20px);
+  --card:rgba(255,255,255,.86);
+  --card2:rgba(255,255,255,.70);
+  --glass-border:rgba(255,255,255,.80);
+  --glass-blur:saturate(180%) blur(20px);
   --shadow:
-    0 8px 32px rgba(60,60,120,.10),
-    0 2px  8px rgba(60,60,120,.07),
-    inset 0 1px 0 rgba(255,255,255,.88);
-  --navbg:rgba(236,240,252,.90);
+    0 8px 32px rgba(40,50,100,.09),
+    0 2px  8px rgba(40,50,100,.06),
+    inset 0 1px 0 rgba(255,255,255,.90);
+  --navbg:rgba(232,236,242,.92);
   --chip:rgba(255,255,255,.70);
   --field:rgba(255,255,255,.80);
   --fieldb:rgba(0,0,0,.10);
@@ -50,20 +45,15 @@
 
 @media (prefers-color-scheme:dark){
   :root{
-    --bg-mesh:
-      radial-gradient(ellipse at 18% 16%, rgba(120,60,240,.44)  0%, transparent 52%),
-      radial-gradient(ellipse at 82%  8%, rgba(30,100,220,.38)  0%, transparent 48%),
-      radial-gradient(ellipse at 56% 88%, rgba(200,40,120,.26)  0%, transparent 52%),
-      radial-gradient(ellipse at 90% 72%, rgba(0,160,120,.30)   0%, transparent 48%),
-      #060618;
-    --card:rgba(255,255,255,.065);
-    --card2:rgba(255,255,255,.04);
+    --bg-mesh: #131720;
+    --card:rgba(255,255,255,.07);
+    --card2:rgba(255,255,255,.045);
     --glass-border:rgba(255,255,255,.10);
     --shadow:
       0 8px 40px rgba(0,0,0,.55),
       0 2px 10px rgba(0,0,0,.30),
       inset 0 1px 0 rgba(255,255,255,.07);
-    --navbg:rgba(10,10,28,.90);
+    --navbg:rgba(19,23,32,.92);
     --chip:rgba(255,255,255,.08);
     --field:rgba(255,255,255,.07);
     --fieldb:rgba(255,255,255,.10);
@@ -80,7 +70,6 @@ body{
   font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text",
               "Segoe UI",system-ui,Roboto,sans-serif;
   background:var(--bg-mesh);
-  background-attachment:fixed;
   color:var(--text);
   font-size:17px;line-height:1.4;
   -webkit-font-smoothing:antialiased;
