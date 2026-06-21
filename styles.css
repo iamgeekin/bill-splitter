@@ -406,13 +406,14 @@ nav.tabs svg{width:25px;height:25px;}
 .split-preview{padding:14px 16px;font-size:14px;}
 .split-preview .pr{display:flex;justify-content:space-between;padding:5px 0;color:var(--muted);}
 .split-preview .pr b{color:var(--text);font-weight:600;}
-/* ── Category bars (Settle tab) ── */
-.cat-row{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:.5px solid var(--sep);}
-.cat-row:last-child{border-bottom:none;}
-.cat-lbl{width:110px;font-size:14px;flex-shrink:0;}
-.cat-track{flex:1;height:6px;background:var(--sep);border-radius:3px;overflow:hidden;}
-.cat-fill{height:100%;background:var(--blue);border-radius:3px;}
-.cat-amt{font-size:14px;font-weight:600;text-align:right;flex-shrink:0;min-width:64px;}
+/* ── Category donut (Settle tab) ── */
+.cat-donut-card{display:flex;align-items:center;gap:20px;padding:16px;}
+.cat-donut-svg{width:130px;height:130px;flex-shrink:0;}
+.cat-legend{flex:1;display:flex;flex-direction:column;gap:8px;min-width:0;}
+.cat-legend-item{display:flex;align-items:center;gap:8px;font-size:14px;}
+.cat-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;}
+.cat-lbl{flex:1;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.cat-amt{font-size:14px;font-weight:600;text-align:right;flex-shrink:0;}
 /* ── QR code box (Group tab) ── */
 #qr-box{display:inline-block;background:#fff;border-radius:14px;padding:10px;margin:12px 0 4px;
   box-shadow:0 2px 12px rgba(0,0,0,.12);}

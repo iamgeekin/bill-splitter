@@ -524,16 +524,31 @@ function renderSettle(){
   const catTotals = {};
   for(const b of unpaid){ const k=b.category||'other'; catTotals[k]=(catTotals[k]||0)+b.totalCents; }
   const catEntries = CATEGORIES.filter(c=>catTotals[c.id]);
-  const maxCat = catEntries.reduce((m,c)=>Math.max(m,catTotals[c.id]),0);
+  const CAT_COLORS = ['#4C9BE8','#F97316','#22C55E','#A855F7','#EC4899','#14B8A6','#F59E0B','#EF4444'];
+  const catSorted = catEntries.slice().sort((a,b)=>catTotals[b.id]-catTotals[a.id]);
+  const catTotal = catSorted.reduce((s,c)=>s+catTotals[c.id],0);
+  const r=40, circ=2*Math.PI*r;
+  let cumul=0;
+  const donutSegs = catSorted.map((c,i)=>{
+    const dash=(catTotals[c.id]/catTotal)*circ;
+    const seg=`<circle cx="50" cy="50" r="${r}" fill="none" stroke="${CAT_COLORS[i%CAT_COLORS.length]}" stroke-width="18" stroke-dasharray="${dash.toFixed(2)} ${(circ-dash).toFixed(2)}" stroke-dashoffset="${(circ/4-cumul).toFixed(2)}"/>`;
+    cumul+=dash; return seg;
+  });
   const catSection = catEntries.length<2 ? '' : `
     <h2 class="section">Spending by category</h2>
-    <div class="card">
-      ${catEntries.sort((a,b)=>catTotals[b.id]-catTotals[a.id]).map(c=>`
-      <div class="cat-row">
-        <span class="cat-lbl">${c.icon} ${c.label}</span>
-        <div class="cat-track"><div class="cat-fill" style="width:${Math.round(catTotals[c.id]/maxCat*100)}%"></div></div>
-        <span class="cat-amt">${money(catTotals[c.id],settleCur)}</span>
-      </div>`).join('')}
+    <div class="card cat-donut-card">
+      <svg viewBox="0 0 100 100" class="cat-donut-svg">
+        <circle cx="50" cy="50" r="${r}" fill="none" stroke="var(--sep)" stroke-width="18"/>
+        ${donutSegs.join('')}
+      </svg>
+      <div class="cat-legend">
+        ${catSorted.map((c,i)=>`
+        <div class="cat-legend-item">
+          <span class="cat-dot" style="background:${CAT_COLORS[i%CAT_COLORS.length]}"></span>
+          <span class="cat-lbl">${c.icon} ${c.label}</span>
+          <span class="cat-amt">${money(catTotals[c.id],settleCur)}</span>
+        </div>`).join('')}
+      </div>
     </div>`;
 
   view.innerHTML = `
