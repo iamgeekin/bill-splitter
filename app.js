@@ -360,7 +360,7 @@ function renderHistory(){
     </div>
     <div class="card scroller">
       <table class="bills">
-        <thead><tr><th>Date</th><th>Bill</th><th>Paid by</th><th class="r">Total</th><th>Status</th></tr></thead>
+        <thead><tr><th>Date</th><th>Bill</th><th>Paid by</th><th class="r">Total</th><th>Status</th><th class="r">Settle</th></tr></thead>
         <tbody>
         ${shown.map(b=>`
           <tr data-open="${b.id}">
@@ -369,11 +369,12 @@ function renderHistory(){
             <td>${esc(personName(b.payerId).split(' ')[0])}</td>
             <td class="r amt">${money(b.totalCents, b.currency)}</td>
             <td><span class="tag ${b.paid?'paid':'unpaid'}" data-toggle="${b.id}">${b.paid?'Paid':'Unpaid'}</span></td>
+            <td class="r">${!b.paid?`<input type="checkbox" class="settle-cb" data-settlecb="${b.id}" ${(!settleSelection||settleSelection.has(b.id))?'checked':''}>`:''}</td>
           </tr>`).join("")}
         </tbody>
       </table>
     </div>
-    <div class="hint">Tap a status to flip it · tap a row for details. Unpaid total: <b>${unpaidTotalStr}</b></div>
+    <div class="hint">Tap a status to flip it · tap a row for details · check Settle to include in settlement. Unpaid total: <b>${unpaidTotalStr}</b></div>
     <div id="detail"></div>`;
   bind();
 }
@@ -408,15 +409,19 @@ function renderDetail(billId){
 
 /* ---------- SETTLE TAB ---------- */
 function renderSettle(){
-  const unpaid = state.bills.filter(b=>!b.paid);
+  const allUnpaid = state.bills.filter(b=>!b.paid);
   if(state.people.length<2){
     view.innerHTML = emptyState("👥","Add more people","You need at least two people in the group to settle up.",
       '<button class="btn" data-go="people">Manage group</button>'); bind(); return;
   }
-  if(!unpaid.length){
+  if(!allUnpaid.length){
+    settleSelection = null;
     view.innerHTML = emptyState("✅","All settled!","There are no unpaid bills right now. Mark bills as unpaid in History to include them here.",
       '<button class="btn sec" data-go="history">View history</button>'); bind(); return;
   }
+  // Drop any stale ids (bills that have since been paid or deleted)
+  if(settleSelection) settleSelection = new Set([...settleSelection].filter(id=>allUnpaid.some(b=>b.id===id)));
+  const unpaid = settleSelection ? allUnpaid.filter(b=>settleSelection.has(b.id)) : allUnpaid;
   const {bal, tx} = settle(unpaid);
   const totUnpaid = unpaid.reduce((a,b)=>a+b.totalCents,0);
 
@@ -524,23 +529,44 @@ function renderSettle(){
   const catTotals = {};
   for(const b of unpaid){ const k=b.category||'other'; catTotals[k]=(catTotals[k]||0)+b.totalCents; }
   const catEntries = CATEGORIES.filter(c=>catTotals[c.id]);
-  const maxCat = catEntries.reduce((m,c)=>Math.max(m,catTotals[c.id]),0);
+  const CAT_COLORS = ['#4C9BE8','#F97316','#22C55E','#A855F7','#EC4899','#14B8A6','#F59E0B','#EF4444'];
+  const catSorted = catEntries.slice().sort((a,b)=>catTotals[b.id]-catTotals[a.id]);
+  const catTotal = catSorted.reduce((s,c)=>s+catTotals[c.id],0);
+  const r=40, circ=2*Math.PI*r;
+  let cumul=0;
+  const donutSegs = catSorted.map((c,i)=>{
+    const dash=(catTotals[c.id]/catTotal)*circ;
+    const seg=`<circle cx="50" cy="50" r="${r}" fill="none" stroke="${CAT_COLORS[i%CAT_COLORS.length]}" stroke-width="18" stroke-dasharray="${dash.toFixed(2)} ${(circ-dash).toFixed(2)}" stroke-dashoffset="${(circ/4-cumul).toFixed(2)}"/>`;
+    cumul+=dash; return seg;
+  });
   const catSection = catEntries.length<2 ? '' : `
     <h2 class="section">Spending by category</h2>
-    <div class="card">
-      ${catEntries.sort((a,b)=>catTotals[b.id]-catTotals[a.id]).map(c=>`
-      <div class="cat-row">
-        <span class="cat-lbl">${c.icon} ${c.label}</span>
-        <div class="cat-track"><div class="cat-fill" style="width:${Math.round(catTotals[c.id]/maxCat*100)}%"></div></div>
-        <span class="cat-amt">${money(catTotals[c.id],settleCur)}</span>
-      </div>`).join('')}
+    <div class="card cat-donut-card">
+      <svg viewBox="0 0 100 100" class="cat-donut-svg">
+        <circle cx="50" cy="50" r="${r}" fill="none" stroke="var(--sep)" stroke-width="18"/>
+        ${donutSegs.join('')}
+      </svg>
+      <div class="cat-legend">
+        ${catSorted.map((c,i)=>`
+        <div class="cat-legend-item">
+          <span class="cat-dot" style="background:${CAT_COLORS[i%CAT_COLORS.length]}"></span>
+          <span class="cat-lbl">${c.icon} ${c.label}</span>
+          <span class="cat-amt">${money(catTotals[c.id],settleCur)}</span>
+        </div>`).join('')}
+      </div>
     </div>`;
 
+  const selLabel = settleSelection===null
+    ? `${allUnpaid.length} unpaid bill${allUnpaid.length>1?'s':''}`
+    : `${unpaid.length} of ${allUnpaid.length} bill${allUnpaid.length>1?'s':''} selected`;
   view.innerHTML = `
-    <div class="card"><div class="split-preview">
-      <div class="pr"><b>${unpaid.length} unpaid bill${unpaid.length>1?'s':''}</b><b>${money(totUnpaid, settleCur)}</b></div>
-      <div class="pr"><span>Payments needed</span><b>${displayTx.length}${saved>0?` <span style="font-size:12px;font-weight:400;color:var(--green)">↓${saved} saved</span>`:''}</b></div>
-    </div></div>
+    <div class="card">
+      <div class="split-preview">
+        <div class="pr"><b>${selLabel}</b><b>${money(totUnpaid, settleCur)}</b></div>
+        <div class="pr"><span>Payments needed</span><b>${displayTx.length}${saved>0?` <span style="font-size:12px;font-weight:400;color:var(--green)">↓${saved} saved</span>`:''}</b></div>
+      </div>
+      ${settleSelection!==null?`<div class="hint" style="padding:0 16px 10px;font-size:13px">Check bills in History to change this selection.</div>`:''}
+    </div>
 
     ${mixedBanner}
     ${fxCard}
@@ -594,8 +620,10 @@ function renderSettle(){
       </div>`;
     })()}
 
-    <button class="btn" data-settleall="1">Mark these ${unpaid.length} bill${unpaid.length>1?'s':''} as paid</button>
-    <div class="hint">This settles every currently-unpaid bill at once. You can flip any back in History.</div>`;
+    ${unpaid.length
+      ? `<button class="btn" data-settleall="1">Mark ${unpaid.length} bill${unpaid.length>1?'s':''} as paid</button>
+         <div class="hint">Settles the selected bills. You can flip any back in History.</div>`
+      : `<div class="hint" style="text-align:center;padding:12px 16px">Select at least one bill above to see a settlement plan.</div>`}`;
   bind();
 }
 
@@ -688,7 +716,17 @@ function bind(){
   view.querySelectorAll("[data-toggle2]").forEach(el=> el.onclick=()=>{ togglePaid(el.dataset.toggle2); });
   view.querySelectorAll("[data-edit]").forEach(el=> el.onclick=()=> startEdit(el.dataset.edit));
   view.querySelectorAll("[data-delbill]").forEach(el=> el.onclick=()=> delBill(el.dataset.delbill));
-  // settle
+  // settle — per-bill checkboxes in History tab
+  view.querySelectorAll(".settle-cb").forEach(el=>{
+    el.onclick  = e => e.stopPropagation();
+    el.onchange = () => {
+      const allUnpaidIds = state.bills.filter(b=>!b.paid).map(b=>b.id);
+      if(!settleSelection) settleSelection = new Set(allUnpaidIds);
+      if(el.checked) settleSelection.add(el.dataset.settlecb);
+      else settleSelection.delete(el.dataset.settlecb);
+      if(settleSelection.size===allUnpaidIds.length) settleSelection=null;
+    };
+  });
   const sa = view.querySelector("[data-settleall]"); if(sa) sa.onclick=settleAll;
   view.querySelectorAll("[data-recordpmt]").forEach(el=> el.onclick=()=>{
     const [from,to,amt,currency]=el.dataset.recordpmt.split('|');
@@ -816,7 +854,13 @@ function startEdit(id){
 
 function delBill(id){ if(!confirm("Delete this bill?")) return; state.bills=state.bills.filter(b=>b.id!==id); save(); render(); toast("Deleted"); }
 function togglePaid(id){ const b=state.bills.find(x=>x.id===id); if(!b) return; b.paid=!b.paid; save(); render(); }
-function settleAll(){ if(!confirm("Mark all unpaid bills as paid?")) return; state.bills.forEach(b=>b.paid=true); save(); render(); toast("All settled ✓"); }
+function settleAll(){
+  const toSettle = settleSelection ? [...settleSelection] : state.bills.filter(b=>!b.paid).map(b=>b.id);
+  if(!toSettle.length){ toast("No bills selected"); return; }
+  if(!confirm(`Mark ${toSettle.length} bill${toSettle.length>1?'s':''} as paid?`)) return;
+  toSettle.forEach(id=>{ const b=state.bills.find(x=>x.id===id); if(b) b.paid=true; });
+  settleSelection=null; save(); render(); toast(`${toSettle.length} bill${toSettle.length>1?'s':''} settled ✓`);
+}
 
 function addPerson(){
   const inp=$("#new-person"); const name=(inp.value||"").trim(); if(!name) return;
