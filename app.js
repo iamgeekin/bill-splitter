@@ -408,15 +408,19 @@ function renderDetail(billId){
 
 /* ---------- SETTLE TAB ---------- */
 function renderSettle(){
-  const unpaid = state.bills.filter(b=>!b.paid);
+  const allUnpaid = state.bills.filter(b=>!b.paid);
   if(state.people.length<2){
     view.innerHTML = emptyState("👥","Add more people","You need at least two people in the group to settle up.",
       '<button class="btn" data-go="people">Manage group</button>'); bind(); return;
   }
-  if(!unpaid.length){
+  if(!allUnpaid.length){
+    settleSelection = null;
     view.innerHTML = emptyState("✅","All settled!","There are no unpaid bills right now. Mark bills as unpaid in History to include them here.",
       '<button class="btn sec" data-go="history">View history</button>'); bind(); return;
   }
+  // Drop any stale ids (bills that have since been paid or deleted)
+  if(settleSelection) settleSelection = new Set([...settleSelection].filter(id=>allUnpaid.some(b=>b.id===id)));
+  const unpaid = settleSelection ? allUnpaid.filter(b=>settleSelection.has(b.id)) : allUnpaid;
   const {bal, tx} = settle(unpaid);
   const totUnpaid = unpaid.reduce((a,b)=>a+b.totalCents,0);
 
@@ -551,9 +555,30 @@ function renderSettle(){
       </div>
     </div>`;
 
+  const selLabel = settleSelection===null
+    ? `${allUnpaid.length} unpaid bill${allUnpaid.length>1?'s':''}`
+    : `${unpaid.length} of ${allUnpaid.length} bill${allUnpaid.length>1?'s':''} selected`;
+  const billPickSection = `
+    <h2 class="section">Bills to settle</h2>
+    <div class="card">
+      ${allUnpaid.map(b=>`
+      <label class="bill-pick-row">
+        <input type="checkbox" class="bill-cb" data-billid="${b.id}" ${(!settleSelection||settleSelection.has(b.id))?'checked':''}>
+        <span class="bill-pick-info">
+          <span>${catIcon(b.category)} ${esc(b.description)}</span>
+          <span class="muted small">${esc((b.date||'').slice(5))}</span>
+        </span>
+        <span class="bill-pick-amt">${money(b.totalCents,b.currency)}</span>
+      </label>`).join('')}
+      <div class="bill-pick-ctrl">
+        <button class="btn sec sm" data-selall="1">Select all</button>
+        <button class="btn sec sm" data-selnone="1">Deselect all</button>
+      </div>
+    </div>`;
   view.innerHTML = `
+    ${billPickSection}
     <div class="card"><div class="split-preview">
-      <div class="pr"><b>${unpaid.length} unpaid bill${unpaid.length>1?'s':''}</b><b>${money(totUnpaid, settleCur)}</b></div>
+      <div class="pr"><b>${selLabel}</b><b>${money(totUnpaid, settleCur)}</b></div>
       <div class="pr"><span>Payments needed</span><b>${displayTx.length}${saved>0?` <span style="font-size:12px;font-weight:400;color:var(--green)">↓${saved} saved</span>`:''}</b></div>
     </div></div>
 
@@ -609,8 +634,10 @@ function renderSettle(){
       </div>`;
     })()}
 
-    <button class="btn" data-settleall="1">Mark these ${unpaid.length} bill${unpaid.length>1?'s':''} as paid</button>
-    <div class="hint">This settles every currently-unpaid bill at once. You can flip any back in History.</div>`;
+    ${unpaid.length
+      ? `<button class="btn" data-settleall="1">Mark ${unpaid.length} bill${unpaid.length>1?'s':''} as paid</button>
+         <div class="hint">Settles the selected bills. You can flip any back in History.</div>`
+      : `<div class="hint" style="text-align:center;padding:12px 16px">Select at least one bill above to see a settlement plan.</div>`}`;
   bind();
 }
 
@@ -703,7 +730,15 @@ function bind(){
   view.querySelectorAll("[data-toggle2]").forEach(el=> el.onclick=()=>{ togglePaid(el.dataset.toggle2); });
   view.querySelectorAll("[data-edit]").forEach(el=> el.onclick=()=> startEdit(el.dataset.edit));
   view.querySelectorAll("[data-delbill]").forEach(el=> el.onclick=()=> delBill(el.dataset.delbill));
-  // settle
+  // settle — bill picker
+  view.querySelectorAll(".bill-cb").forEach(el=> el.onchange=()=>{
+    const allLen=state.bills.filter(b=>!b.paid).length;
+    const checked=new Set([...view.querySelectorAll(".bill-cb:checked")].map(e=>e.dataset.billid));
+    settleSelection=checked.size===allLen?null:checked;
+    renderSettle();
+  });
+  const selAll=view.querySelector("[data-selall]"); if(selAll) selAll.onclick=()=>{ settleSelection=null; renderSettle(); };
+  const selNone=view.querySelector("[data-selnone]"); if(selNone) selNone.onclick=()=>{ settleSelection=new Set(); renderSettle(); };
   const sa = view.querySelector("[data-settleall]"); if(sa) sa.onclick=settleAll;
   view.querySelectorAll("[data-recordpmt]").forEach(el=> el.onclick=()=>{
     const [from,to,amt,currency]=el.dataset.recordpmt.split('|');
@@ -831,7 +866,13 @@ function startEdit(id){
 
 function delBill(id){ if(!confirm("Delete this bill?")) return; state.bills=state.bills.filter(b=>b.id!==id); save(); render(); toast("Deleted"); }
 function togglePaid(id){ const b=state.bills.find(x=>x.id===id); if(!b) return; b.paid=!b.paid; save(); render(); }
-function settleAll(){ if(!confirm("Mark all unpaid bills as paid?")) return; state.bills.forEach(b=>b.paid=true); save(); render(); toast("All settled ✓"); }
+function settleAll(){
+  const toSettle = settleSelection ? [...settleSelection] : state.bills.filter(b=>!b.paid).map(b=>b.id);
+  if(!toSettle.length){ toast("No bills selected"); return; }
+  if(!confirm(`Mark ${toSettle.length} bill${toSettle.length>1?'s':''} as paid?`)) return;
+  toSettle.forEach(id=>{ const b=state.bills.find(x=>x.id===id); if(b) b.paid=true; });
+  settleSelection=null; save(); render(); toast(`${toSettle.length} bill${toSettle.length>1?'s':''} settled ✓`);
+}
 
 function addPerson(){
   const inp=$("#new-person"); const name=(inp.value||"").trim(); if(!name) return;
