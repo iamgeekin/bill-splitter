@@ -360,7 +360,7 @@ function renderHistory(){
     </div>
     <div class="card scroller">
       <table class="bills">
-        <thead><tr><th>Date</th><th>Bill</th><th>Paid by</th><th class="r">Total</th><th>Status</th></tr></thead>
+        <thead><tr><th>Date</th><th>Bill</th><th>Paid by</th><th class="r">Total</th><th>Status</th><th class="r">Settle</th></tr></thead>
         <tbody>
         ${shown.map(b=>`
           <tr data-open="${b.id}">
@@ -369,11 +369,12 @@ function renderHistory(){
             <td>${esc(personName(b.payerId).split(' ')[0])}</td>
             <td class="r amt">${money(b.totalCents, b.currency)}</td>
             <td><span class="tag ${b.paid?'paid':'unpaid'}" data-toggle="${b.id}">${b.paid?'Paid':'Unpaid'}</span></td>
+            <td class="r">${!b.paid?`<input type="checkbox" class="settle-cb" data-settlecb="${b.id}" ${(!settleSelection||settleSelection.has(b.id))?'checked':''}>`:''}</td>
           </tr>`).join("")}
         </tbody>
       </table>
     </div>
-    <div class="hint">Tap a status to flip it · tap a row for details. Unpaid total: <b>${unpaidTotalStr}</b></div>
+    <div class="hint">Tap a status to flip it · tap a row for details · check Settle to include in settlement. Unpaid total: <b>${unpaidTotalStr}</b></div>
     <div id="detail"></div>`;
   bind();
 }
@@ -558,29 +559,14 @@ function renderSettle(){
   const selLabel = settleSelection===null
     ? `${allUnpaid.length} unpaid bill${allUnpaid.length>1?'s':''}`
     : `${unpaid.length} of ${allUnpaid.length} bill${allUnpaid.length>1?'s':''} selected`;
-  const billPickSection = `
-    <h2 class="section">Bills to settle</h2>
-    <div class="card">
-      ${allUnpaid.map(b=>`
-      <label class="bill-pick-row">
-        <input type="checkbox" class="bill-cb" data-billid="${b.id}" ${(!settleSelection||settleSelection.has(b.id))?'checked':''}>
-        <span class="bill-pick-info">
-          <span>${catIcon(b.category)} ${esc(b.description)}</span>
-          <span class="muted small">${esc((b.date||'').slice(5))}</span>
-        </span>
-        <span class="bill-pick-amt">${money(b.totalCents,b.currency)}</span>
-      </label>`).join('')}
-      <div class="bill-pick-ctrl">
-        <button class="btn sec sm" data-selall="1">Select all</button>
-        <button class="btn sec sm" data-selnone="1">Deselect all</button>
-      </div>
-    </div>`;
   view.innerHTML = `
-    ${billPickSection}
-    <div class="card"><div class="split-preview">
-      <div class="pr"><b>${selLabel}</b><b>${money(totUnpaid, settleCur)}</b></div>
-      <div class="pr"><span>Payments needed</span><b>${displayTx.length}${saved>0?` <span style="font-size:12px;font-weight:400;color:var(--green)">↓${saved} saved</span>`:''}</b></div>
-    </div></div>
+    <div class="card">
+      <div class="split-preview">
+        <div class="pr"><b>${selLabel}</b><b>${money(totUnpaid, settleCur)}</b></div>
+        <div class="pr"><span>Payments needed</span><b>${displayTx.length}${saved>0?` <span style="font-size:12px;font-weight:400;color:var(--green)">↓${saved} saved</span>`:''}</b></div>
+      </div>
+      ${settleSelection!==null?`<div class="hint" style="padding:0 16px 10px;font-size:13px">Check bills in History to change this selection.</div>`:''}
+    </div>
 
     ${mixedBanner}
     ${fxCard}
@@ -730,15 +716,17 @@ function bind(){
   view.querySelectorAll("[data-toggle2]").forEach(el=> el.onclick=()=>{ togglePaid(el.dataset.toggle2); });
   view.querySelectorAll("[data-edit]").forEach(el=> el.onclick=()=> startEdit(el.dataset.edit));
   view.querySelectorAll("[data-delbill]").forEach(el=> el.onclick=()=> delBill(el.dataset.delbill));
-  // settle — bill picker
-  view.querySelectorAll(".bill-cb").forEach(el=> el.onchange=()=>{
-    const allLen=state.bills.filter(b=>!b.paid).length;
-    const checked=new Set([...view.querySelectorAll(".bill-cb:checked")].map(e=>e.dataset.billid));
-    settleSelection=checked.size===allLen?null:checked;
-    renderSettle();
+  // settle — per-bill checkboxes in History tab
+  view.querySelectorAll(".settle-cb").forEach(el=>{
+    el.onclick  = e => e.stopPropagation();
+    el.onchange = () => {
+      const allUnpaidIds = state.bills.filter(b=>!b.paid).map(b=>b.id);
+      if(!settleSelection) settleSelection = new Set(allUnpaidIds);
+      if(el.checked) settleSelection.add(el.dataset.settlecb);
+      else settleSelection.delete(el.dataset.settlecb);
+      if(settleSelection.size===allUnpaidIds.length) settleSelection=null;
+    };
   });
-  const selAll=view.querySelector("[data-selall]"); if(selAll) selAll.onclick=()=>{ settleSelection=null; renderSettle(); };
-  const selNone=view.querySelector("[data-selnone]"); if(selNone) selNone.onclick=()=>{ settleSelection=new Set(); renderSettle(); };
   const sa = view.querySelector("[data-settleall]"); if(sa) sa.onclick=settleAll;
   view.querySelectorAll("[data-recordpmt]").forEach(el=> el.onclick=()=>{
     const [from,to,amt,currency]=el.dataset.recordpmt.split('|');
