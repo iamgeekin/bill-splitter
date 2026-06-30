@@ -353,11 +353,18 @@ function renderHistory(){
   const unpaidBills = bills.filter(b=>!b.paid);
   const unpaidByCur = unpaidBills.reduce((m,b)=>{ const s=b.currency||cur(); m[s]=(m[s]||0)+b.totalCents; return m; },{});
   const unpaidTotalStr = Object.entries(unpaidByCur).map(([s,c])=>money(c,s)).join(' + ') || money(0);
+  const allSelected = settleSelection===null || (unpaidBills.length>0 && unpaidBills.every(b=>settleSelection.has(b.id)));
+  const noneSelected = settleSelection!==null && unpaidBills.every(b=>!settleSelection.has(b.id));
 
   view.innerHTML = `
     <div class="filter-bar">
       ${["all","unpaid","paid"].map(f=>`<button data-filter="${f}" class="${historyFilter===f?'on':''}">${f[0].toUpperCase()+f.slice(1)}</button>`).join("")}
     </div>
+    ${unpaidBills.length?`<div class="hint" style="display:flex;align-items:center;gap:14px;padding-top:0">
+      <span>Select bills to settle:</span>
+      <button class="linkbtn" data-selectall ${allSelected?'disabled style="opacity:.4"':''}>Select all</button>
+      <button class="linkbtn" data-deselectall ${noneSelected?'disabled style="opacity:.4"':''}>Deselect all</button>
+    </div>`:''}
     <div class="card scroller">
       <table class="bills">
         <thead><tr><th>Date</th><th>Bill</th><th>Paid by</th><th class="r">Total</th><th>Status</th><th class="r">Settle</th></tr></thead>
@@ -525,9 +532,18 @@ function renderSettle(){
   const naive = naiveDebtCount(unpaid);
   const saved = naive - displayTx.length;
 
-  // Spending by category
+  // Spending by category — convert every bill to one currency so the
+  // percentages reflect real spend, not raw cents across mixed currencies.
+  const catCur = hasAllRates ? settleFx.to : settleCur;
   const catTotals = {};
-  for(const b of unpaid){ const k=b.category||'other'; catTotals[k]=(catTotals[k]||0)+b.totalCents; }
+  for(const b of unpaid){
+    const k = b.category||'other';
+    const bc = b.currency||cur();
+    const amt = hasAllRates ? Math.round(b.totalCents * settleFx.rates[bc]) : b.totalCents;
+    catTotals[k] = (catTotals[k]||0) + amt;
+  }
+  // With mixed currencies and no rates loaded yet, totals aren't comparable.
+  const catConvertible = !mixedCurs || hasAllRates;
   const catEntries = CATEGORIES.filter(c=>catTotals[c.id]);
   const CAT_COLORS = ['#4C9BE8','#F97316','#22C55E','#A855F7','#EC4899','#14B8A6','#F59E0B','#EF4444'];
   const catSorted = catEntries.slice().sort((a,b)=>catTotals[b.id]-catTotals[a.id]);
@@ -539,7 +555,7 @@ function renderSettle(){
     const seg=`<circle cx="50" cy="50" r="${r}" fill="none" stroke="${CAT_COLORS[i%CAT_COLORS.length]}" stroke-width="18" stroke-dasharray="${dash.toFixed(2)} ${(circ-dash).toFixed(2)}" stroke-dashoffset="${(circ/4-cumul).toFixed(2)}"/>`;
     cumul+=dash; return seg;
   });
-  const catSection = catEntries.length<2 ? '' : `
+  const catSection = (catEntries.length<2 || !catConvertible) ? '' : `
     <h2 class="section">Spending by category</h2>
     <div class="card cat-donut-card">
       <svg viewBox="0 0 100 100" class="cat-donut-svg">
@@ -551,7 +567,7 @@ function renderSettle(){
         <div class="cat-legend-item">
           <span class="cat-dot" style="background:${CAT_COLORS[i%CAT_COLORS.length]}"></span>
           <span class="cat-lbl">${c.icon} ${c.label}</span>
-          <span class="cat-amt">${money(catTotals[c.id],settleCur)}</span>
+          <span class="cat-amt">${money(catTotals[c.id],catCur)}</span>
         </div>`).join('')}
       </div>
     </div>`;
@@ -716,6 +732,11 @@ function bind(){
   view.querySelectorAll("[data-toggle2]").forEach(el=> el.onclick=()=>{ togglePaid(el.dataset.toggle2); });
   view.querySelectorAll("[data-edit]").forEach(el=> el.onclick=()=> startEdit(el.dataset.edit));
   view.querySelectorAll("[data-delbill]").forEach(el=> el.onclick=()=> delBill(el.dataset.delbill));
+  // settle — select all / deselect all in History tab
+  const selAll = view.querySelector("[data-selectall]");
+  if(selAll) selAll.onclick = () => { settleSelection = null; render(); };
+  const deselAll = view.querySelector("[data-deselectall]");
+  if(deselAll) deselAll.onclick = () => { settleSelection = new Set(); render(); };
   // settle — per-bill checkboxes in History tab
   view.querySelectorAll(".settle-cb").forEach(el=>{
     el.onclick  = e => e.stopPropagation();
