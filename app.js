@@ -415,6 +415,22 @@ function renderDetail(billId){
 }
 
 /* ---------- SETTLE TAB ---------- */
+// Fetch conversion rates from every unpaid bill's currency into `sym` and
+// re-render once they land. Also used to auto-convert into the base currency
+// when a bill set contains a mix of currencies.
+function loadSettleFx(sym){
+  settleFx = {to:sym, rates:{}, loading:true, error:false};
+  const unpaidNow = state.bills.filter(b=>!b.paid);
+  const curs = [...new Set(unpaidNow.map(b=>b.currency||cur()))];
+  Promise.all(curs.map(c=>fetchFx(c,sym).then(rate=>({c,rate})))).then(results=>{
+    if(settleFx.to!==sym) return; // user changed mid-flight
+    const rates={};
+    let hasError=false;
+    results.forEach(({c,rate})=>{ if(rate!=null) rates[c]=rate; else hasError=true; });
+    settleFx={to:sym,rates,loading:false,error:hasError};
+    renderSettle();
+  });
+}
 function renderSettle(){
   const allUnpaid = state.bills.filter(b=>!b.paid);
   if(state.people.length<2){
@@ -430,18 +446,26 @@ function renderSettle(){
   if(settleSelection) settleSelection = new Set([...settleSelection].filter(id=>allUnpaid.some(b=>b.id===id)));
   const unpaid = settleSelection ? allUnpaid.filter(b=>settleSelection.has(b.id)) : allUnpaid;
   const {bal, tx} = settle(unpaid);
-  const totUnpaid = unpaid.reduce((a,b)=>a+b.totalCents,0);
 
   // Determine the display currency for this settle view
   const billCurs = [...new Set(unpaid.map(b=>b.currency||cur()))];
   const settleCur = billCurs.length===1 ? billCurs[0] : cur();
   const mixedCurs = billCurs.length > 1;
 
+  // Bills span multiple currencies — default to converting everything into the
+  // trip's base currency so mixed-currency bills aren't silently treated as if
+  // they were already in that currency.
+  if(mixedCurs && !settleFx.to && !settleFx.loading) loadSettleFx(settleCur);
+
   // Per-currency per-person balances (for breakdown and conversion)
   const bbc = computeBalByCur(unpaid);
 
   // When all bill currencies have rates loaded, recompute bal+tx in target currency
   const hasAllRates = mixedCurs && !!settleFx.to && billCurs.every(s => settleFx.rates[s] != null);
+  const totUnpaid = unpaid.reduce((a,b)=>{
+    const bc = b.currency||cur();
+    return a + (hasAllRates ? Math.round(b.totalCents * settleFx.rates[bc]) : b.totalCents);
+  },0);
   let displayBal = bal, displayCur = settleCur;
   if(hasAllRates){
     const convBal = {};
@@ -492,7 +516,7 @@ function renderSettle(){
     <h2 class="section">Currency converter</h2>
     <div class="card">
       <div class="people-pick" id="fx-pick">
-        <span class="chip ${!settleFx.to?'on':''}" data-fx="">${esc(settleCur)} <span style="opacity:.7;font-size:13px">base</span></span>
+        <span class="chip ${settleFx.to===settleCur?'on':''}" data-fx="${esc(settleCur)}">${esc(settleCur)} <span style="opacity:.7;font-size:13px">base</span></span>
         ${otherCurs.map(s=>`<span class="chip ${settleFx.to===s?'on':''}" data-fx="${esc(s)}">${esc(s)}</span>`).join("")}
       </div>
       ${settleFx.loading?`<div class="hint" style="padding-bottom:12px">Fetching live rates…</div>`:''}
@@ -500,7 +524,11 @@ function renderSettle(){
       ${rateLines}
     </div>`;
 
-  const mixedBanner = mixedCurs && !hasAllRates ? `<div class="hint" style="color:var(--red);margin-top:4px">⚠️ Bills are in multiple currencies (${billCurs.join(', ')}) — select a target currency below to see totals converted to a single currency.</div>` : '';
+  const mixedBanner = mixedCurs && !hasAllRates && !settleFx.loading
+    ? (settleFx.error
+        ? `<div class="hint" style="color:var(--red);margin-top:4px">⚠️ Couldn't fetch exchange rates for all currencies (${billCurs.join(', ')}) — totals below are unconverted.</div>`
+        : `<div class="hint" style="color:var(--red);margin-top:4px">⚠️ Bills are in multiple currencies (${billCurs.join(', ')}) — select a target currency below to see totals converted to a single currency.</div>`)
+    : '';
 
   // Per-currency breakdown section (shown when mixed + at least one rate loaded)
   let breakdownSection = '';
@@ -578,7 +606,7 @@ function renderSettle(){
   view.innerHTML = `
     <div class="card">
       <div class="split-preview">
-        <div class="pr"><b>${selLabel}</b><b>${money(totUnpaid, settleCur)}</b></div>
+        <div class="pr"><b>${selLabel}</b><b>${money(totUnpaid, hasAllRates ? settleFx.to : settleCur)}</b></div>
         <div class="pr"><span>Payments needed</span><b>${displayTx.length}${saved>0?` <span style="font-size:12px;font-weight:400;color:var(--green)">↓${saved} saved</span>`:''}</b></div>
       </div>
       ${settleSelection!==null?`<div class="hint" style="padding:0 16px 10px;font-size:13px">Check bills in History to change this selection.</div>`:''}
@@ -760,20 +788,9 @@ function bind(){
   });
   view.querySelectorAll("[data-fx]").forEach(el=> el.onclick=()=>{
     const sym = el.dataset.fx;
-    if(!sym){ settleFx={to:null,rates:{},loading:false,error:false}; renderSettle(); return; }
     if(settleFx.to===sym && !settleFx.loading && (Object.keys(settleFx.rates).length>0||settleFx.error)) return; // already loaded
-    settleFx={to:sym,rates:{},loading:true,error:false};
+    loadSettleFx(sym);
     renderSettle();
-    const unpaidNow=state.bills.filter(b=>!b.paid);
-    const curs=[...new Set(unpaidNow.map(b=>b.currency||cur()))];
-    Promise.all(curs.map(c=>fetchFx(c,sym).then(rate=>({c,rate})))).then(results=>{
-      if(settleFx.to!==sym) return; // user changed mid-flight
-      const rates={};
-      let hasError=false;
-      results.forEach(({c,rate})=>{ if(rate!=null) rates[c]=rate; else hasError=true; });
-      settleFx={to:sym,rates,loading:false,error:hasError};
-      renderSettle();
-    });
   });
   // people
   const ap = view.querySelector("[data-addperson]"); if(ap) ap.onclick=addPerson;
