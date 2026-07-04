@@ -298,10 +298,13 @@ nav.tabs button.on{
 nav.tabs svg{width:25px;height:25px;}
 
 /* ── Settle Rows ── */
-.settle-row{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:.5px solid var(--sep);}
+.settle-row{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:.5px solid var(--sep);flex-wrap:wrap;}
 .settle-row:last-child{border-bottom:none;}
-.who{display:flex;align-items:center;gap:8px;font-weight:600;flex:1;}
-.arrow{color:var(--muted);}
+.who{display:flex;align-items:center;gap:8px;font-weight:600;flex:1 1 auto;min-width:0;}
+.who .ava{flex-shrink:0;}
+.who-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
+.arrow{color:var(--muted);flex-shrink:0;}
+.settle-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-left:auto;}
 .wa-btn{
   display:inline-flex;align-items:center;justify-content:center;
   width:34px;height:34px;border-radius:50%;flex-shrink:0;

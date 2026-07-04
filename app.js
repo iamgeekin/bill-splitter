@@ -643,9 +643,9 @@ function renderSettle(){
         })() : '';
         const payBtn = `<button class="btn sec sm" data-recordpmt="${t.from}|${t.to}|${t.amt}|${esc(displayCur)}" title="Record this payment as done" style="flex-shrink:0;padding:6px 12px;font-size:13px">✓ Paid</button>`;
         return `<div class="settle-row">
-          <div class="who">${avatar(t.from)}<span>${esc(personName(t.from).split(' ')[0])}</span>
-            <span class="arrow">→</span>${avatar(t.to)}<span>${esc(personName(t.to).split(' ')[0])}</span></div>
-          <div class="amt">${fm(t.amt)}</div>${payBtn}${waBtn}
+          <div class="who">${avatar(t.from)}<span class="who-name">${esc(personName(t.from).split(' ')[0])}</span>
+            <span class="arrow">→</span>${avatar(t.to)}<span class="who-name">${esc(personName(t.to).split(' ')[0])}</span></div>
+          <div class="settle-actions"><div class="amt">${fm(t.amt)}</div>${payBtn}${waBtn}</div>
         </div>`;
       }).join("")
         : `<div class="hint" style="padding:16px">Everyone's even — no payments needed.</div>`}
@@ -668,11 +668,13 @@ function renderSettle(){
       <div class="card">
         ${pmts.map(p=>`
           <div class="settle-row">
-            <div class="who">${avatar(p.from)}<span>${esc(personName(p.from).split(' ')[0])}</span>
-              <span class="arrow">→</span>${avatar(p.to)}<span>${esc(personName(p.to).split(' ')[0])}</span></div>
-            <div class="amt bal-pos">${money(p.amtCents,p.currency)}</div>
-            <span class="muted small" style="flex-shrink:0">${p.date.slice(5)}</span>
-            <button class="del-x" data-delpmt="${p.id}" title="Undo payment">×</button>
+            <div class="who">${avatar(p.from)}<span class="who-name">${esc(personName(p.from).split(' ')[0])}</span>
+              <span class="arrow">→</span>${avatar(p.to)}<span class="who-name">${esc(personName(p.to).split(' ')[0])}</span></div>
+            <div class="settle-actions">
+              <div class="amt bal-pos">${money(p.amtCents,p.currency)}</div>
+              <span class="muted small" style="flex-shrink:0">${p.date.slice(5)}</span>
+              <button class="del-x" data-delpmt="${p.id}" title="Undo payment">×</button>
+            </div>
           </div>`).join('')}
       </div>`;
     })()}
