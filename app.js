@@ -603,6 +603,16 @@ function renderSettle(){
   const selLabel = settleSelection===null
     ? `${allUnpaid.length} unpaid bill${allUnpaid.length>1?'s':''}`
     : `${unpaid.length} of ${allUnpaid.length} bill${allUnpaid.length>1?'s':''} selected`;
+
+  const shareText = [
+    `💸 Settle up — ${selLabel}`,
+    `Total: ${money(totUnpaid, hasAllRates ? settleFx.to : settleCur)}`,
+    '',
+    ...(displayTx.length
+      ? displayTx.map(t=>`${personName(t.from)} → ${personName(t.to)}: ${fm(t.amt)}`)
+      : ["Everyone's even — no payments needed."])
+  ].join('\n');
+
   view.innerHTML = `
     <div class="card">
       <div class="split-preview">
@@ -617,7 +627,10 @@ function renderSettle(){
     ${breakdownSection}
     ${catSection}
 
-    <h2 class="section">Who pays whom</h2>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin:20px 4px 8px">
+      <h2 class="section" style="margin:0">Who pays whom</h2>
+      <button class="linkbtn" data-sharesettle="${esc(shareText)}">Share breakdown</button>
+    </div>
     <div class="card">
       ${displayTx.length? displayTx.map(t=>{
         const debtor = state.people.find(p=>p.id===t.from);
@@ -630,9 +643,9 @@ function renderSettle(){
         })() : '';
         const payBtn = `<button class="btn sec sm" data-recordpmt="${t.from}|${t.to}|${t.amt}|${esc(displayCur)}" title="Record this payment as done" style="flex-shrink:0;padding:6px 12px;font-size:13px">✓ Paid</button>`;
         return `<div class="settle-row">
-          <div class="who">${avatar(t.from)}<span>${esc(personName(t.from).split(' ')[0])}</span>
-            <span class="arrow">→</span>${avatar(t.to)}<span>${esc(personName(t.to).split(' ')[0])}</span></div>
-          <div class="amt">${fm(t.amt)}</div>${payBtn}${waBtn}
+          <div class="who">${avatar(t.from)}<span class="who-name">${esc(personName(t.from).split(' ')[0])}</span>
+            <span class="arrow">→</span>${avatar(t.to)}<span class="who-name">${esc(personName(t.to).split(' ')[0])}</span></div>
+          <div class="settle-actions"><div class="amt">${fm(t.amt)}</div>${payBtn}${waBtn}</div>
         </div>`;
       }).join("")
         : `<div class="hint" style="padding:16px">Everyone's even — no payments needed.</div>`}
@@ -655,11 +668,13 @@ function renderSettle(){
       <div class="card">
         ${pmts.map(p=>`
           <div class="settle-row">
-            <div class="who">${avatar(p.from)}<span>${esc(personName(p.from).split(' ')[0])}</span>
-              <span class="arrow">→</span>${avatar(p.to)}<span>${esc(personName(p.to).split(' ')[0])}</span></div>
-            <div class="amt bal-pos">${money(p.amtCents,p.currency)}</div>
-            <span class="muted small" style="flex-shrink:0">${p.date.slice(5)}</span>
-            <button class="del-x" data-delpmt="${p.id}" title="Undo payment">×</button>
+            <div class="who">${avatar(p.from)}<span class="who-name">${esc(personName(p.from).split(' ')[0])}</span>
+              <span class="arrow">→</span>${avatar(p.to)}<span class="who-name">${esc(personName(p.to).split(' ')[0])}</span></div>
+            <div class="settle-actions">
+              <div class="amt bal-pos">${money(p.amtCents,p.currency)}</div>
+              <span class="muted small" style="flex-shrink:0">${p.date.slice(5)}</span>
+              <button class="del-x" data-delpmt="${p.id}" title="Undo payment">×</button>
+            </div>
           </div>`).join('')}
       </div>`;
     })()}
@@ -777,6 +792,8 @@ function bind(){
     };
   });
   const sa = view.querySelector("[data-settleall]"); if(sa) sa.onclick=settleAll;
+  const shareBtn = view.querySelector("[data-sharesettle]");
+  if(shareBtn) shareBtn.onclick = () => shareText(shareBtn.dataset.sharesettle);
   view.querySelectorAll("[data-recordpmt]").forEach(el=> el.onclick=()=>{
     const [from,to,amt,currency]=el.dataset.recordpmt.split('|');
     state.payments.push({id:uid(),from,to,amtCents:+amt,currency,date:today()});
@@ -1058,6 +1075,12 @@ async function copyTripLink(){
     if(navigator.share){ await navigator.share({title:"SplitTrip",text:"Join our trip on SplitTrip!",url}); return; }
     await navigator.clipboard.writeText(url); toast("Link copied ✓");
   }catch(e){ if(e?.name==="AbortError") return; prompt("Share this link:",url); }
+}
+async function shareText(text){
+  try{
+    if(navigator.share){ await navigator.share({title:"SplitTrip settlement",text}); return; }
+    await navigator.clipboard.writeText(text); toast("Breakdown copied ✓");
+  }catch(e){ if(e?.name==="AbortError") return; prompt("Copy this breakdown:",text); }
 }
 /* ── Theme toggle ── */
 const _MOON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>`;
