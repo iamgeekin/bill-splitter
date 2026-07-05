@@ -45,6 +45,7 @@ let draft = freshDraft();
 let historyFilter = "all";       // all | unpaid | paid
 let settleSelection = null;      // null = auto (all unpaid); else Set of bill ids
 let settleFx = { to: null, rates: {}, loading: false, error: false };
+let historyFx = { to: null, rates: {}, loading: false, error: false }; // currency picked for the All-transactions summary
 
 function freshDraft(){
   return { id:null, description:"", date:today(), payerId:(state?.people[0]?.id||null),
@@ -343,6 +344,21 @@ function updatePreview(){
 }
 
 /* ---------- HISTORY TAB ---------- */
+// Fetch conversion rates for every bill's currency — paid or unpaid — into
+// `sym`. Powers the All-transactions summary, which (unlike Settle) always
+// covers the whole trip regardless of paid status.
+function loadHistoryFx(sym){
+  historyFx = {to:sym, rates:{}, loading:true, error:false};
+  const curs = [...new Set(state.bills.map(b=>b.currency||cur()))];
+  Promise.all(curs.map(c=>fetchFx(c,sym).then(rate=>({c,rate})))).then(results=>{
+    if(historyFx.to!==sym) return; // user changed mid-flight
+    const rates={};
+    let hasError=false;
+    results.forEach(({c,rate})=>{ if(rate!=null) rates[c]=rate; else hasError=true; });
+    historyFx={to:sym,rates,loading:false,error:hasError};
+    renderHistory();
+  });
+}
 function renderHistory(){
   if(!state.bills.length){
     view.innerHTML = emptyState("🧾","No bills yet","Bills you add will appear here in a tidy table. Mark them paid or unpaid as you settle up.",
@@ -356,8 +372,41 @@ function renderHistory(){
   const allSelected = settleSelection===null || (unpaidBills.length>0 && unpaidBills.every(b=>settleSelection.has(b.id)));
   const noneSelected = settleSelection!==null && unpaidBills.every(b=>!settleSelection.has(b.id));
 
+  // All-transactions summary — every bill regardless of paid status, so it
+  // keeps showing the full trip total even after everything's settled up.
+  const allCurs = [...new Set(bills.map(b=>b.currency||cur()))];
+  const mixedAllCurs = allCurs.length>1;
+  const nativeAllCur = allCurs.length===1 ? allCurs[0] : cur();
+  if(mixedAllCurs && !historyFx.to && !historyFx.loading) loadHistoryFx(nativeAllCur);
+  const hasAllHistRates = !!historyFx.to && allCurs.every(s=>historyFx.rates[s]!=null);
+  const totalNativeStr = Object.entries(bills.reduce((m,b)=>{ const s=b.currency||cur(); m[s]=(m[s]||0)+b.totalCents; return m; },{}))
+    .map(([s,c])=>money(c,s)).join(' + ') || money(0);
+  const totalDisplayStr = hasAllHistRates
+    ? money(bills.reduce((a,b)=>a+Math.round(b.totalCents*historyFx.rates[b.currency||cur()]),0), historyFx.to)
+    : totalNativeStr;
+  const histCatConvertible = !mixedAllCurs || hasAllHistRates;
+  const histCatCur = hasAllHistRates ? historyFx.to : nativeAllCur;
+  const histCatConvertFn = b => hasAllHistRates ? Math.round(b.totalCents*historyFx.rates[b.currency||cur()]) : b.totalCents;
+  const summaryCatSection = histCatConvertible ? categorySection(bills, histCatCur, histCatConvertFn) : '';
+  const paidCount = bills.length - unpaidBills.length;
+
   view.innerHTML = `
-    <div class="filter-bar">
+    <h2 class="section">All transactions</h2>
+    <div class="card">
+      <div class="split-preview">
+        <div class="pr"><b>Total spent</b><b>${totalDisplayStr}</b></div>
+        <div class="pr"><span>Bills</span><span>${bills.length} (${paidCount} paid, ${unpaidBills.length} unpaid)</span></div>
+      </div>
+    </div>
+    ${fxPickerCard(historyFx, allCurs, mixedAllCurs, nativeAllCur, "histfx")}
+    ${mixedAllCurs && !hasAllHistRates && !historyFx.loading
+      ? (historyFx.error
+          ? `<div class="hint" style="color:var(--red);margin-top:4px">⚠️ Couldn't fetch exchange rates for all currencies (${allCurs.join(', ')}) — total above is unconverted.</div>`
+          : `<div class="hint" style="color:var(--red);margin-top:4px">⚠️ Bills are in multiple currencies (${allCurs.join(', ')}) — pick a currency above to see one combined total.</div>`)
+      : ''}
+    ${summaryCatSection}
+
+    <div class="filter-bar" style="margin-top:20px">
       ${["all","unpaid","paid"].map(f=>`<button data-filter="${f}" class="${historyFilter===f?'on':''}">${f[0].toUpperCase()+f.slice(1)}</button>`).join("")}
     </div>
     ${unpaidBills.length?`<div class="hint" style="display:flex;align-items:center;gap:14px;padding-top:0">
@@ -412,6 +461,72 @@ function renderDetail(billId){
     </div>`;
   bind();
   det.scrollIntoView({behavior:"smooth", block:"nearest"});
+}
+
+/* ---------- Shared: currency converter card + category donut ---------- */
+// Renders the "pick a currency" chip row + live rate lines. `fx` is a
+// {to, rates, loading, error} state object (e.g. settleFx or historyFx).
+function fxPickerCard(fx, curs, mixedCurs, nativeCur, dataAttr){
+  const otherCurs = CURRENCIES.filter(s=>s!==nativeCur);
+  let rateLines = '';
+  if(fx.to && !fx.loading && !fx.error){
+    if(mixedCurs){
+      rateLines = curs.filter(s=>fx.rates[s]!=null).map(s=>
+        `<div class="fx-rate">1 ${ISO[s]||s} = ${fx.rates[s].toLocaleString(undefined,{minimumFractionDigits:4,maximumFractionDigits:4})} ${ISO[fx.to]||fx.to}&nbsp;&nbsp;<span class="muted small">· Frankfurter · ECB</span></div>`
+      ).join('');
+    } else if(fx.rates[nativeCur]!=null){
+      rateLines = `<div class="fx-rate">1 ${ISO[nativeCur]||nativeCur} = ${fx.rates[nativeCur].toLocaleString(undefined,{minimumFractionDigits:4,maximumFractionDigits:4})} ${ISO[fx.to]||fx.to}&nbsp;&nbsp;<span class="muted small">· Frankfurter · ECB reference rate</span></div>`;
+    }
+  }
+  return `
+    <h2 class="section">Currency converter</h2>
+    <div class="card">
+      <div class="people-pick">
+        <span class="chip ${fx.to===nativeCur?'on':''}" data-${dataAttr}="${esc(nativeCur)}">${esc(nativeCur)} <span style="opacity:.7;font-size:13px">base</span></span>
+        ${otherCurs.map(s=>`<span class="chip ${fx.to===s?'on':''}" data-${dataAttr}="${esc(s)}">${esc(s)}</span>`).join("")}
+      </div>
+      ${fx.loading?`<div class="hint" style="padding-bottom:12px">Fetching live rates…</div>`:''}
+      ${fx.error?`<div class="hint" style="color:var(--red);padding-bottom:12px">Could not fetch rates — check your connection.</div>`:''}
+      ${rateLines}
+    </div>`;
+}
+
+// Donut + legend of `bills` totals grouped by category, in `catCur`.
+// `convertFn(bill)` returns that bill's total in cents already converted to catCur.
+function categorySection(bills, catCur, convertFn){
+  const catTotals = {};
+  for(const b of bills){
+    const k = b.category||'other';
+    catTotals[k] = (catTotals[k]||0) + convertFn(b);
+  }
+  const catEntries = CATEGORIES.filter(c=>catTotals[c.id]);
+  if(catEntries.length<2) return '';
+  const CAT_COLORS = ['#4C9BE8','#F97316','#22C55E','#A855F7','#EC4899','#14B8A6','#F59E0B','#EF4444'];
+  const catSorted = catEntries.slice().sort((a,b)=>catTotals[b.id]-catTotals[a.id]);
+  const catTotal = catSorted.reduce((s,c)=>s+catTotals[c.id],0);
+  const r=40, circ=2*Math.PI*r;
+  let cumul=0;
+  const donutSegs = catSorted.map((c,i)=>{
+    const dash=(catTotals[c.id]/catTotal)*circ;
+    const seg=`<circle cx="50" cy="50" r="${r}" fill="none" stroke="${CAT_COLORS[i%CAT_COLORS.length]}" stroke-width="18" stroke-dasharray="${dash.toFixed(2)} ${(circ-dash).toFixed(2)}" stroke-dashoffset="${(circ/4-cumul).toFixed(2)}"/>`;
+    cumul+=dash; return seg;
+  });
+  return `
+    <h2 class="section">Spending by category</h2>
+    <div class="card cat-donut-card">
+      <svg viewBox="0 0 100 100" class="cat-donut-svg">
+        <circle cx="50" cy="50" r="${r}" fill="none" stroke="var(--sep)" stroke-width="18"/>
+        ${donutSegs.join('')}
+      </svg>
+      <div class="cat-legend">
+        ${catSorted.map((c,i)=>`
+        <div class="cat-legend-item">
+          <span class="cat-dot" style="background:${CAT_COLORS[i%CAT_COLORS.length]}"></span>
+          <span class="cat-lbl">${c.icon} ${c.label}</span>
+          <span class="cat-amt">${money(catTotals[c.id],catCur)}</span>
+        </div>`).join('')}
+      </div>
+    </div>`;
 }
 
 /* ---------- SETTLE TAB ---------- */
@@ -500,29 +615,7 @@ function renderSettle(){
     return money(cents, displayCur);
   };
 
-  // Build currency converter card
-  const otherCurs = CURRENCIES.filter(s=>s!==settleCur);
-  let rateLines = '';
-  if(settleFx.to && !settleFx.loading && !settleFx.error){
-    if(mixedCurs){
-      rateLines = billCurs.filter(s=>settleFx.rates[s]!=null).map(s=>
-        `<div class="fx-rate">1 ${ISO[s]||s} = ${settleFx.rates[s].toLocaleString(undefined,{minimumFractionDigits:4,maximumFractionDigits:4})} ${ISO[settleFx.to]||settleFx.to}&nbsp;&nbsp;<span class="muted small">· Frankfurter · ECB</span></div>`
-      ).join('');
-    } else if(settleFx.rates[settleCur]!=null){
-      rateLines = `<div class="fx-rate">1 ${ISO[settleCur]||settleCur} = ${settleFx.rates[settleCur].toLocaleString(undefined,{minimumFractionDigits:4,maximumFractionDigits:4})} ${ISO[settleFx.to]||settleFx.to}&nbsp;&nbsp;<span class="muted small">· Frankfurter · ECB reference rate</span></div>`;
-    }
-  }
-  const fxCard = `
-    <h2 class="section">Currency converter</h2>
-    <div class="card">
-      <div class="people-pick" id="fx-pick">
-        <span class="chip ${settleFx.to===settleCur?'on':''}" data-fx="${esc(settleCur)}">${esc(settleCur)} <span style="opacity:.7;font-size:13px">base</span></span>
-        ${otherCurs.map(s=>`<span class="chip ${settleFx.to===s?'on':''}" data-fx="${esc(s)}">${esc(s)}</span>`).join("")}
-      </div>
-      ${settleFx.loading?`<div class="hint" style="padding-bottom:12px">Fetching live rates…</div>`:''}
-      ${settleFx.error?`<div class="hint" style="color:var(--red);padding-bottom:12px">Could not fetch rates — check your connection.</div>`:''}
-      ${rateLines}
-    </div>`;
+  const fxCard = fxPickerCard(settleFx, billCurs, mixedCurs, settleCur, "fx");
 
   const mixedBanner = mixedCurs && !hasAllRates && !settleFx.loading
     ? (settleFx.error
@@ -563,42 +656,13 @@ function renderSettle(){
   // Spending by category — convert every bill to one currency so the
   // percentages reflect real spend, not raw cents across mixed currencies.
   const catCur = hasAllRates ? settleFx.to : settleCur;
-  const catTotals = {};
-  for(const b of unpaid){
-    const k = b.category||'other';
-    const bc = b.currency||cur();
-    const amt = hasAllRates ? Math.round(b.totalCents * settleFx.rates[bc]) : b.totalCents;
-    catTotals[k] = (catTotals[k]||0) + amt;
-  }
   // With mixed currencies and no rates loaded yet, totals aren't comparable.
   const catConvertible = !mixedCurs || hasAllRates;
-  const catEntries = CATEGORIES.filter(c=>catTotals[c.id]);
-  const CAT_COLORS = ['#4C9BE8','#F97316','#22C55E','#A855F7','#EC4899','#14B8A6','#F59E0B','#EF4444'];
-  const catSorted = catEntries.slice().sort((a,b)=>catTotals[b.id]-catTotals[a.id]);
-  const catTotal = catSorted.reduce((s,c)=>s+catTotals[c.id],0);
-  const r=40, circ=2*Math.PI*r;
-  let cumul=0;
-  const donutSegs = catSorted.map((c,i)=>{
-    const dash=(catTotals[c.id]/catTotal)*circ;
-    const seg=`<circle cx="50" cy="50" r="${r}" fill="none" stroke="${CAT_COLORS[i%CAT_COLORS.length]}" stroke-width="18" stroke-dasharray="${dash.toFixed(2)} ${(circ-dash).toFixed(2)}" stroke-dashoffset="${(circ/4-cumul).toFixed(2)}"/>`;
-    cumul+=dash; return seg;
-  });
-  const catSection = (catEntries.length<2 || !catConvertible) ? '' : `
-    <h2 class="section">Spending by category</h2>
-    <div class="card cat-donut-card">
-      <svg viewBox="0 0 100 100" class="cat-donut-svg">
-        <circle cx="50" cy="50" r="${r}" fill="none" stroke="var(--sep)" stroke-width="18"/>
-        ${donutSegs.join('')}
-      </svg>
-      <div class="cat-legend">
-        ${catSorted.map((c,i)=>`
-        <div class="cat-legend-item">
-          <span class="cat-dot" style="background:${CAT_COLORS[i%CAT_COLORS.length]}"></span>
-          <span class="cat-lbl">${c.icon} ${c.label}</span>
-          <span class="cat-amt">${money(catTotals[c.id],catCur)}</span>
-        </div>`).join('')}
-      </div>
-    </div>`;
+  const catConvertFn = b => {
+    const bc = b.currency||cur();
+    return hasAllRates ? Math.round(b.totalCents * settleFx.rates[bc]) : b.totalCents;
+  };
+  const catSection = catConvertible ? categorySection(unpaid, catCur, catConvertFn) : '';
 
   const selLabel = settleSelection===null
     ? `${allUnpaid.length} unpaid bill${allUnpaid.length>1?'s':''}`
@@ -808,6 +872,13 @@ function bind(){
     if(settleFx.to===sym && !settleFx.loading && (Object.keys(settleFx.rates).length>0||settleFx.error)) return; // already loaded
     loadSettleFx(sym);
     renderSettle();
+  });
+  // history — all-transactions currency picker
+  view.querySelectorAll("[data-histfx]").forEach(el=> el.onclick=()=>{
+    const sym = el.dataset.histfx;
+    if(historyFx.to===sym && !historyFx.loading && (Object.keys(historyFx.rates).length>0||historyFx.error)) return; // already loaded
+    loadHistoryFx(sym);
+    renderHistory();
   });
   // people
   const ap = view.querySelector("[data-addperson]"); if(ap) ap.onclick=addPerson;
