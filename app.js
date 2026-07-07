@@ -46,6 +46,8 @@ let historyFilter = "all";       // all | unpaid | paid
 let settleSelection = null;      // null = auto (all unpaid); else Set of bill ids
 let settleFx = { to: null, rates: {}, loading: false, error: false };
 let historyFx = { to: null, rates: {}, loading: false, error: false }; // currency picked for the All-transactions summary
+let historyBreakdownMode = "category"; // category | person — spending breakdown view on History tab
+let settleBreakdownMode = "category";  // category | person — spending breakdown view on Settle tab
 
 function freshDraft(){
   return { id:null, description:"", date:today(), payerId:(state?.people[0]?.id||null),
@@ -386,8 +388,9 @@ function renderHistory(){
     : totalNativeStr;
   const histCatConvertible = !mixedAllCurs || hasAllHistRates;
   const histCatCur = hasAllHistRates ? historyFx.to : nativeAllCur;
-  const histCatConvertFn = b => hasAllHistRates ? Math.round(b.totalCents*historyFx.rates[b.currency||cur()]) : b.totalCents;
-  const summaryCatSection = histCatConvertible ? categorySection(bills, histCatCur, histCatConvertFn) : '';
+  const histCatConvertFn = (b, cents) => hasAllHistRates ? Math.round(cents*historyFx.rates[b.currency||cur()]) : cents;
+  const summaryBreakdownSection = histCatConvertible
+    ? spendingBreakdownBlock(bills, histCatCur, histCatConvertFn, historyBreakdownMode, "history") : '';
   const paidCount = bills.length - unpaidBills.length;
 
   view.innerHTML = `
@@ -404,7 +407,7 @@ function renderHistory(){
           ? `<div class="hint" style="color:var(--red);margin-top:4px">⚠️ Couldn't fetch exchange rates for all currencies (${allCurs.join(', ')}) — total above is unconverted.</div>`
           : `<div class="hint" style="color:var(--red);margin-top:4px">⚠️ Bills are in multiple currencies (${allCurs.join(', ')}) — pick a currency above to see one combined total.</div>`)
       : ''}
-    ${summaryCatSection}
+    ${summaryBreakdownSection}
 
     <div class="filter-bar" style="margin-top:20px">
       ${["all","unpaid","paid"].map(f=>`<button data-filter="${f}" class="${historyFilter===f?'on':''}">${f[0].toUpperCase()+f.slice(1)}</button>`).join("")}
@@ -492,12 +495,13 @@ function fxPickerCard(fx, curs, mixedCurs, nativeCur, dataAttr){
 }
 
 // Donut + legend of `bills` totals grouped by category, in `catCur`.
-// `convertFn(bill)` returns that bill's total in cents already converted to catCur.
+// `convertFn(bill, cents=bill.totalCents)` converts an amount from that bill's
+// native currency into `catCur`.
 function categorySection(bills, catCur, convertFn){
   const catTotals = {};
   for(const b of bills){
     const k = b.category||'other';
-    catTotals[k] = (catTotals[k]||0) + convertFn(b);
+    catTotals[k] = (catTotals[k]||0) + convertFn(b, b.totalCents);
   }
   const catEntries = CATEGORIES.filter(c=>catTotals[c.id]);
   if(catEntries.length<2) return '';
@@ -512,7 +516,6 @@ function categorySection(bills, catCur, convertFn){
     cumul+=dash; return seg;
   });
   return `
-    <h2 class="section">Spending by category</h2>
     <div class="card cat-donut-card">
       <svg viewBox="0 0 100 100" class="cat-donut-svg">
         <circle cx="50" cy="50" r="${r}" fill="none" stroke="var(--sep)" stroke-width="18"/>
@@ -527,6 +530,54 @@ function categorySection(bills, catCur, convertFn){
         </div>`).join('')}
       </div>
     </div>`;
+}
+
+// Horizontal bar list of `bills` totals grouped by person (each person's
+// allocated *share* of every bill, not who paid), in `personCur`.
+// `convertFn(bill, cents=bill.totalCents)` converts an amount from that
+// bill's native currency into `personCur`.
+function personSection(bills, personCur, convertFn){
+  const totals = {};
+  for(const b of bills){
+    const shares = computeShares(b);
+    for(const pid in shares) totals[pid] = (totals[pid]||0) + convertFn(b, shares[pid]);
+  }
+  const entries = state.people.filter(p=>totals[p.id]);
+  if(entries.length<2) return '';
+  const sorted = entries.slice().sort((a,b)=>totals[b.id]-totals[a.id]);
+  const max = Math.max(...sorted.map(p=>totals[p.id]));
+  return `
+    <div class="card person-bars-card">
+      ${sorted.map(p=>`
+      <div class="person-bar-row">
+        <div class="person-bar-head">
+          <span class="person-bar-name">${avatar(p.id)} ${esc(personName(p.id))}</span>
+          <span class="person-bar-amt">${money(totals[p.id],personCur)}</span>
+        </div>
+        <div class="person-bar-track"><div class="person-bar-fill" style="width:${max?(totals[p.id]/max*100).toFixed(1):0}%"></div></div>
+      </div>`).join('')}
+    </div>`;
+}
+
+// Shared "Spending by category / person" block used on both History and
+// Settle. `mode` is the tab's current historyBreakdownMode/settleBreakdownMode,
+// `scope` identifies which one a click on the toggle should update.
+function spendingBreakdownBlock(bills, dispCur, convertFn, mode, scope){
+  const catSec = categorySection(bills, dispCur, convertFn);
+  const personSec = personSection(bills, dispCur, convertFn);
+  if(!catSec && !personSec) return '';
+  let active = mode;
+  if(active==='category' && !catSec) active = 'person';
+  if(active==='person' && !personSec) active = 'category';
+  return `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin:20px 4px 8px;gap:10px">
+      <h2 class="section" style="margin:0">Spending by ${active}</h2>
+      <div class="seg-toggle">
+        <button class="${active==='category'?'on':''}" data-breakdownmode="category" data-scope="${scope}" ${catSec?'':'disabled'}>Category</button>
+        <button class="${active==='person'?'on':''}" data-breakdownmode="person" data-scope="${scope}" ${personSec?'':'disabled'}>Person</button>
+      </div>
+    </div>
+    ${active==='category'?catSec:personSec}`;
 }
 
 /* ---------- SETTLE TAB ---------- */
@@ -658,11 +709,12 @@ function renderSettle(){
   const catCur = hasAllRates ? settleFx.to : settleCur;
   // With mixed currencies and no rates loaded yet, totals aren't comparable.
   const catConvertible = !mixedCurs || hasAllRates;
-  const catConvertFn = b => {
+  const catConvertFn = (b, cents) => {
     const bc = b.currency||cur();
-    return hasAllRates ? Math.round(b.totalCents * settleFx.rates[bc]) : b.totalCents;
+    return hasAllRates ? Math.round(cents * settleFx.rates[bc]) : cents;
   };
-  const catSection = catConvertible ? categorySection(unpaid, catCur, catConvertFn) : '';
+  const breakdownSectionByMode = catConvertible
+    ? spendingBreakdownBlock(unpaid, catCur, catConvertFn, settleBreakdownMode, "settle") : '';
 
   const selLabel = settleSelection===null
     ? `${allUnpaid.length} unpaid bill${allUnpaid.length>1?'s':''}`
@@ -689,7 +741,7 @@ function renderSettle(){
     ${mixedBanner}
     ${fxCard}
     ${breakdownSection}
-    ${catSection}
+    ${breakdownSectionByMode}
 
     <div style="display:flex;align-items:center;justify-content:space-between;margin:20px 4px 8px">
       <h2 class="section" style="margin:0">Who pays whom</h2>
@@ -834,6 +886,13 @@ function bind(){
   view.querySelectorAll("[data-go]").forEach(el=> el.onclick=()=>{activeTab=el.dataset.go; render();});
   // history
   view.querySelectorAll("[data-filter]").forEach(el=> el.onclick=()=>{historyFilter=el.dataset.filter; render();});
+  // spending-breakdown category/person toggle (History + Settle)
+  view.querySelectorAll("[data-breakdownmode]").forEach(el=> el.onclick=()=>{
+    if(el.disabled) return;
+    if(el.dataset.scope==="history") historyBreakdownMode = el.dataset.breakdownmode;
+    else settleBreakdownMode = el.dataset.breakdownmode;
+    render();
+  });
   view.querySelectorAll("[data-toggle]").forEach(el=> el.onclick=e=>{e.stopPropagation(); togglePaid(el.dataset.toggle);});
   view.querySelectorAll("[data-open]").forEach(el=> el.onclick=()=> renderDetail(el.dataset.open));
   view.querySelectorAll("[data-toggle2]").forEach(el=> el.onclick=()=>{ togglePaid(el.dataset.toggle2); });
