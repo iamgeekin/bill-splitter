@@ -419,6 +419,24 @@ nav.tabs svg{width:25px;height:25px;}
 .cat-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;}
 .cat-lbl{flex:1;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .cat-amt{font-size:14px;font-weight:600;text-align:right;flex-shrink:0;}
+/* ── Category/Person breakdown toggle ── */
+.seg-toggle{display:inline-flex;background:var(--chip);border-radius:var(--r-pill);padding:3px;gap:2px;flex-shrink:0;border:1px solid var(--glass-border);}
+.seg-toggle button{
+  border:none;background:none;padding:6px 14px;border-radius:var(--r-pill);
+  font-size:13px;font-weight:600;color:var(--muted);cursor:pointer;font-family:inherit;
+  transition:background .15s,color .15s;
+}
+.seg-toggle button.on{background:rgba(10,132,255,.85);color:#fff;}
+.seg-toggle button:disabled{opacity:.35;cursor:default;}
+/* ── Spending by person (bar chart) ── */
+.person-bars-card{padding:16px;display:flex;flex-direction:column;gap:14px;}
+.person-bar-row{display:flex;flex-direction:column;gap:6px;}
+.person-bar-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:14px;}
+.person-bar-name{display:flex;align-items:center;gap:8px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.person-bar-name .ava{width:24px;height:24px;font-size:10px;}
+.person-bar-amt{font-weight:600;flex-shrink:0;}
+.person-bar-track{height:10px;border-radius:6px;background:var(--sep);overflow:hidden;}
+.person-bar-fill{height:100%;border-radius:6px;background:linear-gradient(90deg,var(--blue),rgba(100,60,200,.9));}
 /* ── QR code box (Group tab) ── */
 #qr-box{display:inline-block;background:#fff;border-radius:14px;padding:10px;margin:12px 0 4px;
   box-shadow:0 2px 12px rgba(0,0,0,.12);}
