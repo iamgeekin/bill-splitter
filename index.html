@@ -20,6 +20,7 @@
   <header class="bar">
     <div class="bar-inner">
       <div>
+        <button id="trip-pill" class="trip-pill" onclick="openTripSwitcher()" aria-label="Switch trip"></button>
         <h1 id="h-title">Add a Bill</h1>
         <div class="sub" id="h-sub">Split a new expense with your group</div>
       </div>
@@ -36,6 +37,16 @@
     <div class="spin"></div>
     <div style="font-weight:600">Reading receipt…</div>
     <div class="muted small" id="ocr-status" style="margin-top:6px">Loading OCR engine</div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="trip-modal" onclick="if(event.target===this) closeTripSwitcher()">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h2>Your trips</h2>
+      <button class="modal-x" onclick="closeTripSwitcher()" aria-label="Close">×</button>
+    </div>
+    <div id="trip-modal-body"></div>
   </div>
 </div>
 

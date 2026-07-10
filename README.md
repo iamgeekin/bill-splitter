@@ -9,6 +9,7 @@ A single-page web app for splitting bills between friends on a trip. Runs **enti
 - **History table** — every bill in a tidy, filterable table with a paid/unpaid toggle.
 - **Settle up** — looks at all *unpaid* bills and tells you the minimum set of payments: who pays whom and how much.
 - **Tax & tip** — for itemized bills, allocated proportionally to each person's items.
+- **Multiple trips** — keep separate people/bills/payments per trip and switch between them (e.g. an ended trip and a new one) from the trip name in the header. Each trip can have its own live sync.
 - **Backup** — export/import your data as a JSON file.
 
 ## Put it on your iPhone (no developer account, no local server)

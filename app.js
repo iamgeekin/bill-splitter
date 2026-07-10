@@ -23,12 +23,39 @@ const FB_READY = !!FIREBASE_CONFIG.databaseURL && (()=>{
 })();
 
 /* ---------------- State ---------------- */
-const KEY = "splittrip.v1";
+const TRIPS_KEY = "splittrip.trips";           // metadata for every local trip profile
+const ACTIVE_TRIP_KEY = "splittrip.activeTrip"; // id of the currently open trip
+const THEME_KEY = "splittrip.v1.theme";         // device preference, shared across trips
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now()+"-"+Math.random().toString(16).slice(2));
 const today = () => new Date().toISOString().slice(0,10);
 
-let state = load() || { people:[], bills:[], settings:{currency:"$"}, payments:[] };
+function tripStateKey(id){ return "splittrip.v1."+id; }
+function tripSyncKey(id){ return tripStateKey(id)+".sync"; }
+
+// One-time migration: apps installed before multi-trip support kept everything
+// under the flat "splittrip.v1" key. Fold that into a first trip profile so
+// existing users don't lose their data.
+function _migrateToMultiTrip(){
+  if(localStorage.getItem(TRIPS_KEY)) return;
+  const legacyRaw = localStorage.getItem("splittrip.v1");
+  const legacySync = localStorage.getItem("splittrip.v1.sync");
+  const id = uid();
+  if(legacyRaw!=null){ localStorage.setItem(tripStateKey(id), legacyRaw); localStorage.removeItem("splittrip.v1"); }
+  if(legacySync!=null){ localStorage.setItem(tripSyncKey(id), legacySync); localStorage.removeItem("splittrip.v1.sync"); }
+  localStorage.setItem(TRIPS_KEY, JSON.stringify([{id, name:"My Trip", createdAt:Date.now()}]));
+  localStorage.setItem(ACTIVE_TRIP_KEY, id);
+}
+_migrateToMultiTrip();
+
+let trips = JSON.parse(localStorage.getItem(TRIPS_KEY) || "[]");
+let activeTripId = localStorage.getItem(ACTIVE_TRIP_KEY);
+if(!activeTripId || !trips.some(t=>t.id===activeTripId)) activeTripId = trips[0]?.id;
+
+let KEY = tripStateKey(activeTripId);
 function load(){ try{ return JSON.parse(localStorage.getItem(KEY)); }catch{ return null; } }
+function saveTripsList(){ localStorage.setItem(TRIPS_KEY, JSON.stringify(trips)); }
+
+let state = load() || { people:[], bills:[], settings:{currency:"$"}, payments:[] };
 if(!state.payments) state.payments = [];
 function save(){
   localStorage.setItem(KEY, JSON.stringify(state));
@@ -179,6 +206,7 @@ const TITLES = {
 function render(){
   const [t,s] = TITLES[activeTab];
   $("#h-title").textContent = t; $("#h-sub").textContent = s;
+  updateTripPill();
   if(activeTab==="add") renderAdd();
   else if(activeTab==="history") renderHistory();
   else if(activeTab==="settle") renderSettle();
@@ -833,26 +861,26 @@ function renderPeople(){
     ${FB_READY ? (syncId ? `
     <div class="card" style="text-align:center;padding:20px 16px 16px">
       <div class="muted small">Connected · changes sync to everyone in real time</div>
-      <div class="trip-code">${esc(syncId)}</div>
+      <div class="sync-code">${esc(syncId)}</div>
       <div id="qr-box"></div>
       <div class="muted small" style="margin-bottom:14px">Scan or share the code above to join</div>
       <div style="display:flex;gap:8px;justify-content:center">
         <button class="btn sm" data-copylink="1">Copy link</button>
-        <button class="btn danger sm" data-leavetrip="1">Leave trip</button>
+        <button class="btn danger sm" data-leavesync="1">Leave sync</button>
       </div>
       <div style="border-top:.5px solid var(--sep);margin-top:12px;padding-top:12px">
         <div class="muted small" style="margin-bottom:8px">Owner actions</div>
-        <button class="btn danger sm" data-deletetrip="1" style="width:100%">Delete trip for everyone</button>
+        <button class="btn danger sm" data-deletesync="1" style="width:100%">Delete sync for everyone</button>
       </div>
     </div>` : `
     <div class="card">
-      <div class="row"><div class="grow"><div>Start a shared trip</div><div class="muted small">Real-time sync — everyone sees bill changes instantly</div></div>
-        <button class="btn sm" data-createtrip="1">Create</button></div>
+      <div class="row"><div class="grow"><div>Start syncing this trip</div><div class="muted small">Real-time sync — everyone sees bill changes instantly</div></div>
+        <button class="btn sm" data-startsync="1">Start</button></div>
       <div style="border-top:.5px solid var(--sep);padding:12px 16px 8px">
-        <div class="muted small" style="margin-bottom:8px">Already have a trip code?</div>
+        <div class="muted small" style="margin-bottom:8px">Already have a sync code?</div>
         <div style="display:flex;gap:8px">
           <input class="inp" id="join-code" placeholder="ABC123" maxlength="6" autocomplete="off" autocapitalize="characters">
-          <button class="btn sm" data-jointrip="1">Join</button>
+          <button class="btn sm" data-joinsync="1">Join</button>
         </div>
       </div>
     </div>`) : `
@@ -947,13 +975,13 @@ function bind(){
     const p=state.people.find(x=>x.id===el.dataset.setphone); if(p){ p.phone=el.value.trim(); save(); }
   });
   view.querySelectorAll("[data-cur]").forEach(el=> el.onclick=()=>{ state.settings.currency=el.dataset.cur; save(); render(); });
-  const ct=view.querySelector("[data-createtrip]"); if(ct) ct.onclick=createTrip;
-  const lt=view.querySelector("[data-leavetrip]"); if(lt) lt.onclick=leaveTrip;
-  const dt=view.querySelector("[data-deletetrip]"); if(dt) dt.onclick=deleteTrip;
-  const cl=view.querySelector("[data-copylink]"); if(cl) cl.onclick=copyTripLink;
-  const jt=view.querySelector("[data-jointrip]"); if(jt) jt.onclick=()=>joinTrip(view.querySelector("#join-code")?.value||"");
+  const ct=view.querySelector("[data-startsync]"); if(ct) ct.onclick=startSync;
+  const lt=view.querySelector("[data-leavesync]"); if(lt) lt.onclick=leaveSync;
+  const dt=view.querySelector("[data-deletesync]"); if(dt) dt.onclick=deleteSyncForEveryone;
+  const cl=view.querySelector("[data-copylink]"); if(cl) cl.onclick=copySyncLink;
+  const jt=view.querySelector("[data-joinsync]"); if(jt) jt.onclick=()=>joinSync(view.querySelector("#join-code")?.value||"");
   const jc=view.querySelector("#join-code"); if(jc){
-    jc.onkeydown=e=>{ if(e.key==="Enter") joinTrip(jc.value); };
+    jc.onkeydown=e=>{ if(e.key==="Enter") joinSync(jc.value); };
     jc.oninput=e=>{ e.target.value=e.target.value.toUpperCase().replace(/[^A-Z0-9]/g,""); };
   }
   const ex=view.querySelector("[data-export]"); if(ex) ex.onclick=exportData;
@@ -1061,9 +1089,9 @@ function delPerson(id){
   state.people=state.people.filter(p=>p.id!==id); save(); render();
 }
 function resetAll(){ if(!confirm("Delete ALL people and bills? This cannot be undone.")) return;
-  // Reset only ever wipes THIS device. If we're in a shared trip, leave it first so
+  // Reset only ever wipes THIS device. If this trip is syncing, stop first so
   // we never push an empty state to the DB and clear it for everyone in the group.
-  if(syncRef && !confirm("You're in a shared trip. Reset will leave the trip and clear this device only — the group's data stays in the cloud. Continue?")) return;
+  if(syncRef && !confirm("This trip is syncing. Reset will stop syncing and clear this device only — the group's data stays in the cloud. Continue?")) return;
   _disconnectSync();
   state={people:[],bills:[],settings:{currency:cur()},payments:[]}; save(); draft=freshDraft(); activeTab="people"; render(); }
 
@@ -1083,6 +1111,98 @@ function importData(){
     r.readAsText(file); };
   f.click();
 }
+
+/* ── Trip switching — multiple local trip profiles ────────────────────────── */
+function tripName(id){ return trips.find(t=>t.id===id)?.name || "Trip"; }
+// Point all in-memory state at a (possibly brand new) trip id. Callers are
+// responsible for detaching/reattaching the live-sync listener around this.
+function _activateTrip(id){
+  activeTripId = id;
+  localStorage.setItem(ACTIVE_TRIP_KEY, id);
+  KEY = tripStateKey(id);
+  state = load() || { people:[], bills:[], settings:{currency:"$"}, payments:[] };
+  if(!state.payments) state.payments = [];
+  draft = freshDraft();
+  activeTab = "add";
+  historyFilter = "all";
+  settleSelection = null;
+  settleFx = { to:null, rates:{}, loading:false, error:false };
+  historyFx = { to:null, rates:{}, loading:false, error:false };
+}
+function switchTrip(id){
+  if(id===activeTripId){ closeTripSwitcher(); return; }
+  _disconnectSync(false);
+  _activateTrip(id);
+  render();
+  _resumeSync().catch(()=>{});
+  toast(`Switched to "${tripName(id)}"`);
+  closeTripSwitcher();
+}
+function createNewTripProfile(){
+  const name=(prompt("Name this trip", "")||"").trim();
+  if(!name) return;
+  const id=uid();
+  trips.push({id, name, createdAt:Date.now()});
+  saveTripsList();
+  _disconnectSync(false);
+  _activateTrip(id);
+  render();
+  toast(`Created "${name}"`);
+  closeTripSwitcher();
+}
+function renameTripProfile(id){
+  const t=trips.find(t=>t.id===id); if(!t) return;
+  const name=(prompt("Rename trip", t.name)||"").trim();
+  if(!name || name===t.name) return;
+  t.name=name; saveTripsList();
+  updateTripPill(); renderTripSwitcher();
+}
+function deleteTripProfile(id){
+  if(trips.length<=1){ toast("You need at least one trip"); return; }
+  const t=trips.find(t=>t.id===id); if(!t) return;
+  if(!confirm(`Delete "${t.name}"?\n\nThis permanently removes all its people, bills and payments from this device. This cannot be undone.`)) return;
+  const wasActive = id===activeTripId;
+  if(wasActive) _disconnectSync(false);
+  localStorage.removeItem(tripStateKey(id));
+  localStorage.removeItem(tripSyncKey(id));
+  trips = trips.filter(t=>t.id!==id);
+  saveTripsList();
+  if(wasActive){
+    _activateTrip(trips[0].id);
+    render();
+    _resumeSync().catch(()=>{});
+  }
+  toast("Trip deleted");
+  renderTripSwitcher();
+}
+function updateTripPill(){
+  const btn=document.getElementById("trip-pill");
+  if(btn) btn.textContent = tripName(activeTripId) + " ▾";
+}
+function renderTripSwitcher(){
+  const body=document.getElementById("trip-modal-body"); if(!body) return;
+  body.innerHTML = `
+    <div class="trip-list">
+      ${trips.map(t=>`
+        <div class="trip-item ${t.id===activeTripId?'on':''}">
+          <button class="trip-item-main" data-switchtrip="${t.id}">
+            <span class="trip-item-name">${esc(t.name)}</span>
+            ${t.id===activeTripId?'<span class="tag paid">Active</span>':''}
+          </button>
+          <button class="trip-item-icon" data-renametrip="${t.id}" aria-label="Rename">✏️</button>
+          ${trips.length>1?`<button class="trip-item-icon" data-deltrip="${t.id}" aria-label="Delete">🗑️</button>`:''}
+        </div>`).join("")}
+    </div>
+    <div class="row" style="padding:14px 0 0;border-top:.5px solid var(--sep)">
+      <button class="btn sec sm" style="width:100%" data-newtrip="1">＋ New trip</button>
+    </div>`;
+  body.querySelectorAll("[data-switchtrip]").forEach(el=> el.onclick=()=> switchTrip(el.dataset.switchtrip));
+  body.querySelectorAll("[data-renametrip]").forEach(el=> el.onclick=e=>{ e.stopPropagation(); renameTripProfile(el.dataset.renametrip); });
+  body.querySelectorAll("[data-deltrip]").forEach(el=> el.onclick=e=>{ e.stopPropagation(); deleteTripProfile(el.dataset.deltrip); });
+  const nt=body.querySelector("[data-newtrip]"); if(nt) nt.onclick=createNewTripProfile;
+}
+function openTripSwitcher(){ renderTripSwitcher(); document.getElementById("trip-modal").classList.add("show"); }
+function closeTripSwitcher(){ const m=document.getElementById("trip-modal"); if(m) m.classList.remove("show"); }
 
 /* ── Live sync (Firebase Realtime Database) ──────────────────────────────── */
 function _stateForPush(){ return JSON.parse(JSON.stringify(state)); }
@@ -1116,39 +1236,53 @@ function _genCode(){
   const c='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no I,O,0,1
   let s=''; for(let i=0;i<6;i++) s+=c[Math.floor(Math.random()*c.length)]; return s;
 }
-async function createTrip(){
+async function startSync(){
   if(!FB_READY){ toast("Configure Firebase first — see code comments"); return; }
   const code=_genCode();
   try{
     await firebase.database().ref('trips/'+code).set(_stateForPush());
-    await _doJoin(code);
-  }catch(e){ console.error(e); toast("Couldn't create trip — check Firebase config"); }
+    await _doJoinSync(code);
+  }catch(e){ console.error(e); toast("Couldn't start sync — check Firebase config"); }
 }
-async function joinTrip(code){
+async function joinSync(code){
   if(!FB_READY){ toast("Configure Firebase first"); return; }
   code=(code||"").trim().toUpperCase();
-  if(code.length!==6){ toast("Enter the 6-character trip code"); return; }
+  if(code.length!==6){ toast("Enter the 6-character sync code"); return; }
   try{
     const snap=await firebase.database().ref('trips/'+code).once('value');
-    if(!snap.exists()){ toast('Trip "'+code+'" not found'); return; }
+    if(!snap.exists()){ toast('Sync code "'+code+'" not found'); return; }
     const hasLocal=state.people.length||state.bills.length;
     const ok=!hasLocal||confirm("Joining will replace the local bills on this device. Continue?");
     if(!ok) return;
-    await _doJoin(code);
+    await _doJoinSync(code);
   }catch(e){ console.error(e); toast("Couldn't join — check your connection"); }
 }
-async function _doJoin(code){
+async function _doJoinSync(code){
+  // Guard against a trip switch happening while this fetch is in flight — without
+  // this, a slow round trip for a trip the user has since switched away from could
+  // land after the fact and overwrite whatever trip is now active.
+  const forTrip=activeTripId;
+  const ref=firebase.database().ref('trips/'+code);
+  const snap=await ref.once('value');
+  if(activeTripId!==forTrip) return; // switched to another trip mid-fetch — discard
+  if(!snap.exists()){
+    // Code no longer exists in the cloud (e.g. deleted "for everyone") — forget it
+    // locally instead of silently resurrecting the trip node on the next save().
+    localStorage.removeItem(KEY+'.sync');
+    return;
+  }
   if(syncRef) syncRef.off();
-  syncRef=firebase.database().ref('trips/'+code);
-  const snap=await syncRef.once('value');
-  state=_normalizeState(snap.val()||state);
+  syncRef=ref;
+  state=_normalizeState(snap.val());
   localStorage.setItem(KEY,JSON.stringify(state));
   draft=freshDraft(); syncId=code;
   localStorage.setItem(KEY+'.sync',code);
   syncRef.on('value',snap=>{
+    if(activeTripId!==forTrip) return; // stale listener from a trip we've since left
     const d=snap.val(); if(!d) return;
     clearTimeout(_syncDebounce);
     _syncDebounce=setTimeout(()=>{
+      if(activeTripId!==forTrip) return;
       const incoming=_normalizeState(d);
       if(_stableStr(incoming)===_stableStr(state)) return;  // our own echo / no real change
       if(activeTab==='add'&&(draft.description||draft.items.length||draft.total)) return; // don't clobber an active edit
@@ -1158,19 +1292,21 @@ async function _doJoin(code){
     },300);
   });
   history.replaceState(null,'',location.pathname+'#join='+code);
-  render(); toast('Connected to trip '+code+' ✓');
+  render(); toast('Connected ✓');
 }
-// Detach from the shared trip without ever writing to it. Clears the listener,
-// the in-memory refs and the saved code so nothing downstream can push to the DB.
-function _disconnectSync(){
+// Detach from the live-sync session. forget=true (the default) also erases the
+// saved sync code — used when explicitly leaving/deleting a sync. forget=false is
+// used when merely switching to another local trip, so switching back later can
+// silently resume this trip's sync via _resumeSync().
+function _disconnectSync(forget=true){
   if(syncRef){ syncRef.off(); syncRef=null; }
   syncId=null;
   clearTimeout(_syncDebounce);
-  localStorage.removeItem(KEY+'.sync');
+  if(forget) localStorage.removeItem(KEY+'.sync');
   history.replaceState(null,'',location.pathname);
 }
-function leaveTrip(){
-  if(!confirm("Leave this shared trip? You'll stop syncing with the group.")) return;
+function leaveSync(){
+  if(!confirm("Stop syncing this trip? You'll stop sharing updates with the group.")) return;
   // Disconnect FIRST so anything below only ever touches this device, never the DB.
   _disconnectSync();
   // The group's bills/people were copied onto this device when we joined. Offer a
@@ -1181,10 +1317,10 @@ function leaveTrip(){
     draft = freshDraft();
     activeTab = "people";
   }
-  render(); toast("Left trip");
+  render(); toast("Sync stopped");
 }
-async function deleteTrip(){
-  if(!confirm("Delete this trip for EVERYONE?\n\nThis permanently removes all bills and people from the cloud. Other members will lose access immediately.\n\nThis cannot be undone.")) return;
+async function deleteSyncForEveryone(){
+  if(!confirm("Delete this synced trip for EVERYONE?\n\nThis permanently removes all bills and people from the cloud. Other members will lose access immediately.\n\nThis cannot be undone.")) return;
   const code=syncId;   // capture before disconnect clears it
   _disconnectSync();   // detach listener first — no further writes from this device
   // Clear this device's local state
@@ -1192,14 +1328,14 @@ async function deleteTrip(){
   save(); draft=freshDraft(); activeTab="people";
   try{
     await firebase.database().ref('trips/'+code).remove();
-    toast("Trip deleted for everyone ✓");
+    toast("Deleted for everyone ✓");
   }catch(e){
     console.error(e);
     toast("Deleted locally — couldn't reach Firebase. Check your connection.");
   }
   render();
 }
-async function copyTripLink(){
+async function copySyncLink(){
   const url=location.origin+location.pathname+'#join='+syncId;
   try{
     if(navigator.share){ await navigator.share({title:"SplitTrip",text:"Join our trip on SplitTrip!",url}); return; }
@@ -1228,7 +1364,7 @@ function _updateThemeIcon(){
 function toggleTheme(){
   const next=_isDark()?'light':'dark';
   document.documentElement.dataset.theme=next;
-  localStorage.setItem(KEY+'.theme',next);
+  localStorage.setItem(THEME_KEY,next);
   _updateThemeIcon();
 }
 async function _renderQR(){
@@ -1239,11 +1375,14 @@ async function _renderQR(){
   new QRCode(box,{text:location.origin+location.pathname+'#join='+syncId,
     width:180,height:180,colorDark:'#000000',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.M});
 }
-async function _resumeSync(){
+// Reconnect this trip's own saved sync code, if any, without the interactive
+// "replace local bills?" confirm — resuming your own trip isn't "joining" fresh.
+// checkHash=true only at first app load, to pick up a shared "#join=CODE" link.
+async function _resumeSync(checkHash){
   const saved=localStorage.getItem(KEY+'.sync');
-  const m=!saved && location.hash.match(/^#join=([A-Z0-9]{6})$/i);
-  if(saved) await joinTrip(saved).catch(()=>{});
-  else if(m) await joinTrip(m[1]).catch(()=>{});
+  if(saved){ await _doJoinSync(saved).catch(()=>{}); return; }
+  const m=checkHash && location.hash.match(/^#join=([A-Z0-9]{6})$/i);
+  if(m) await joinSync(m[1]).catch(()=>{});
 }
 
 /* ---------------- OCR ---------------- */
@@ -1323,4 +1462,4 @@ if("serviceWorker" in navigator && location.protocol==="https:"){
   navigator.serviceWorker.register("sw.js").catch(()=>{});
 }
 
-(async()=>{ if(FB_READY) await _resumeSync(); render(); _updateThemeIcon(); })();
+(async()=>{ if(FB_READY) await _resumeSync(true); render(); _updateThemeIcon(); })();
